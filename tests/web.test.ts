@@ -203,7 +203,12 @@ describe("web setup app", () => {
   it("serves landing, privacy, terms, reviewer guide and logo", async () => {
     const base = await start();
     const home = await (await fetch(`${base}/`)).text();
-    expect(home).toContain("No mail is stored");
+    expect(home).toContain("No email stored");
+    expect(home).toContain('property="og:image" content="https://mcp.openmail.tools/og.png"');
+    expect(home).toContain("https://mcp.openmail.tools/mcp");
+    expect(home).toContain('href="/signup"');
+    expect(home).not.toMatch(/style="/);
+    expect(home).not.toMatch(/<script>(?!<)/);
     expect(home).toContain("Read-only");
     expect(home).toContain('href="/privacy"');
     expect(home).toContain('rel="icon"');
@@ -226,6 +231,9 @@ describe("web setup app", () => {
     expect(png.headers.get("content-type")).toBe("image/png");
     expect(Buffer.from(await png.arrayBuffer()).subarray(1, 4).toString()).toBe("PNG");
     expect((await fetch(`${base}/favicon.ico`)).status).toBe(200);
+    const og = await fetch(`${base}/og.png`);
+    expect(og.headers.get("content-type")).toBe("image/png");
+    expect((await fetch(`${base}/static/site.js`)).headers.get("content-type")).toContain("javascript");
   });
 
   it("refuses private custom hosts before any IMAP login and rate limits mailbox probes", async () => {

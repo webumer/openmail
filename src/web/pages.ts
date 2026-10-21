@@ -4,67 +4,222 @@ import type { AccountDraft } from "./forms.js";
 import { escapeHtml } from "./html.js";
 
 export const SUPPORT_EMAIL = "support@openmail.tools";
+export const SITE_URL = "https://mcp.openmail.tools";
+export const MCP_ENDPOINT = `${SITE_URL}/mcp`;
+const DEFAULT_DESCRIPTION =
+  "Connect any IMAP email inbox to your AI assistant. Read-only, works with any provider, and no email content is stored.";
 
-export function layout(title: string, body: string, options?: { csrf?: string; script?: boolean }): string {
-  const logout =
-    options?.csrf === undefined
-      ? ""
-      : `<form method="post" action="/logout"><input type="hidden" name="_csrf" value="${escapeHtml(options.csrf)}"><button class="secondary" type="submit">Log out</button></form>`;
+export interface LayoutOptions {
+  csrf?: string;
+  script?: boolean;
+  description?: string;
+  /** Landing page: full-width sections instead of the narrow page column. */
+  landing?: boolean;
+  path?: string;
+}
+
+const LOGO_MARK = `<svg class="mark" viewBox="0 0 512 512" width="32" height="32" aria-hidden="true" focusable="false"><rect width="512" height="512" rx="112" fill="#0E7C66"/><path d="M104 236 L256 116 L408 236 Z" fill="#8FE3C9" stroke="#8FE3C9" stroke-width="16" stroke-linejoin="round"/><rect x="96" y="220" width="320" height="196" rx="28" fill="#FFFFFF"/><path d="M128 252 L256 340 L384 252" fill="none" stroke="#0E7C66" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+export function layout(title: string, body: string, options: LayoutOptions = {}): string {
+  const description = options.description ?? DEFAULT_DESCRIPTION;
+  const url = `${SITE_URL}${options.path ?? "/"}`;
+  const signedIn = options.csrf !== undefined;
+  const account = signedIn
+    ? `<a class="nav-link" href="/dashboard">Dashboard</a><form method="post" action="/logout"><input type="hidden" name="_csrf" value="${escapeHtml(options.csrf ?? "")}"><button class="btn btn-ghost" type="submit">Log out</button></form>`
+    : `<a class="nav-link" href="/login">Log in</a><a class="btn btn-primary btn-sm" href="/signup">Get started</a>`;
+  const sections = options.landing
+    ? `<nav class="nav-sections" aria-label="Sections"><a class="nav-link" href="#how">How it works</a><a class="nav-link" href="#connect">Connect</a><a class="nav-link" href="#security">Security</a><a class="nav-link" href="#faq">FAQ</a></nav>`
+    : "";
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)}</title>
+<meta name="description" content="${escapeHtml(description)}">
+<meta name="theme-color" content="#0E7C66">
+<link rel="canonical" href="${escapeHtml(url)}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="OpenMail">
+<meta property="og:title" content="${escapeHtml(title)}">
+<meta property="og:description" content="${escapeHtml(description)}">
+<meta property="og:url" content="${escapeHtml(url)}">
+<meta property="og:image" content="${SITE_URL}/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="OpenMail: connect any email inbox to your AI assistant">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${escapeHtml(title)}">
+<meta name="twitter:description" content="${escapeHtml(description)}">
+<meta name="twitter:image" content="${SITE_URL}/og.png">
 <link rel="icon" type="image/svg+xml" href="/logo.svg">
 <link rel="icon" type="image/png" href="/logo.png">
 <link rel="apple-touch-icon" href="/logo.png">
 <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
-<header class="top"><a class="brand" href="/"><img src="/logo.svg" alt="" width="28" height="28">OpenMail</a>${logout}</header>
-<main>
+<body${options.landing ? ' class="landing"' : ""}>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header"><div class="container header-inner">
+<a class="brand" href="/">${LOGO_MARK}<span>OpenMail</span></a>
+${sections}
+<div class="nav-account">${account}</div>
+</div></header>
+<main id="main"${options.landing ? "" : ' class="page"'}>
 ${body}
 </main>
-<footer class="foot"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/reviewers">Reviewer guide</a> · <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a></footer>
-${options?.script ? '<script src="/static/app.js"></script>' : ""}
+<footer class="site-footer"><div class="container footer-inner">
+<div class="footer-brand"><a class="brand" href="/">${LOGO_MARK}<span>OpenMail</span></a><p>Email for AI assistants. Read-only, any IMAP provider.</p></div>
+<nav class="footer-links" aria-label="Footer">
+<a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/reviewers">Reviewers</a><span class="soon" title="The source code will be published soon">GitHub (coming soon)</span><a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>
+</nav>
+<p class="copyright">© 2026 OpenMail</p>
+</div></footer>
+<script src="/static/site.js"></script>
+${options.script ? '<script src="/static/app.js"></script>' : ""}
 </body>
 </html>`;
 }
 
+function icon(name: "user" | "inbox" | "key" | "shield" | "eye" | "lock" | "check" | "code" | "server" | "chat"): string {
+  const paths: Record<string, string> = {
+    user: '<circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/>',
+    inbox: '<path d="M3 13l3-8h12l3 8v6H3z"/><path d="M3 13h5l1 3h6l1-3h5"/>',
+    key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3M14 9l2 2"/>',
+    shield: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
+    eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+    lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/>',
+    check: '<path d="M5 12l5 5 9-10"/>',
+    code: '<path d="M8 8l-4 4 4 4M16 8l4 4-4 4M14 5l-4 14"/>',
+    server: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
+    chat: '<path d="M4 5h16v11H9l-5 4z"/>',
+  };
+  return `<svg class="icon" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${paths[name] ?? ""}</svg>`;
+}
+
+function copyField(label: string, value: string, id: string): string {
+  return `<div class="copy-field"><span class="copy-label" id="${id}-label">${escapeHtml(label)}</span><div class="copy-row"><code id="${id}">${escapeHtml(value)}</code><button class="btn btn-copy" type="button" data-copy="${id}" aria-describedby="${id}-label">Copy</button></div></div>`;
+}
+
 export function homePage(input: { email: string | null; csrf?: string; notice?: string }): string {
-  const notice = input.notice ? `<div class="notice"><p>${escapeHtml(input.notice)}</p></div>` : "";
-  const links = input.email
-    ? `<p>Signed in as ${escapeHtml(input.email)}.</p><div class="actions"><a class="button" href="/dashboard">Dashboard</a></div>`
-    : `<div class="actions"><a class="button" href="/signup">Sign up</a><a class="button secondary" href="/login">Log in</a></div>`;
+  const notice = input.notice ? `<div class="container"><div class="notice" role="status"><p>${escapeHtml(input.notice)}</p></div></div>` : "";
+  const primary = input.email
+    ? `<a class="btn btn-primary btn-lg" href="/dashboard">Open dashboard</a>`
+    : `<a class="btn btn-primary btn-lg" href="/signup">Get started free</a>`;
+  const tools: Array<[string, string]> = [
+    ["list_accounts", "Lists the mailboxes you added: name, address, provider and host. Never passwords."],
+    ["list_folders", "Folders with total and unread counts."],
+    ["search_messages", "Search by sender, recipient, subject, text, date, unread or attachments. Newest first, paged."],
+    ["read_message", "Headers, plain-text body and attachment names and sizes. Does not mark the message as read."],
+    ["read_thread", "The whole conversation, oldest first."],
+  ];
+  const security: Array<[Parameters<typeof icon>[0], string, string]> = [
+    ["eye", "Read-only", "Agents can list, search and read. They cannot send, delete, move or flag mail."],
+    ["check", "Never marks mail as read", "Messages are opened read-only and fetched with BODY.PEEK, so unread stays unread."],
+    ["server", "No email stored", "Messages are fetched from your provider on request and passed straight to your assistant."],
+    ["lock", "Encrypted passwords", "Mailbox passwords are encrypted with AES-256-GCM using a key unique to your account."],
+    ["key", "Hashed, revocable keys", "API keys are stored only as SHA-256 hashes. Revoke one and it stops working at once."],
+    ["shield", "TLS always verified", "Connections to mail servers use TLS with certificate checks that cannot be switched off."],
+    ["chat", "Email is untrusted content", "Tool results tell the assistant that email text is data, never instructions to follow."],
+    ["code", "MIT licensed", "OpenMail is MIT-licensed software. The source code will be published soon."],
+  ];
+  const faq: Array<[string, string]> = [
+    ["Is my mail stored?", "No. OpenMail fetches messages from your provider when your assistant asks and does not keep them. It stores only your account details, encrypted mailbox passwords and hashed API keys. See the <a href=\"/privacy\">privacy policy</a>."],
+    ["Can it send or delete email?", "No. Today OpenMail is read-only: no sending, deleting, moving or flagging. Sending is planned, as drafts that go out only after you approve them."],
+    ["Which providers work?", "Any mailbox with IMAP access. Migadu, Fastmail, Zoho and iCloud have presets; for anything else, enter your IMAP server with TLS on port 993 (or STARTTLS on 143). Use an app-specific password where your provider offers one."],
+    ["How do I revoke access?", "Open your dashboard and revoke the API key, or remove the mailbox. Both take effect immediately."],
+    ["Is it free?", "Yes, OpenMail is free while in beta."],
+    ["Can I self-host?", "Yes, OpenMail runs as a single Docker Compose stack. Self-hosting docs will be on GitHub when the source is published, which is coming soon."],
+  ];
   return layout(
-    "OpenMail: email for AI agents",
-    `${notice}<div class="hero"><img src="/logo.svg" alt="OpenMail logo" width="96" height="96"><h1>OpenMail</h1></div>
-<p class="lead">Let your AI agent read and search your email over IMAP, from any provider: Migadu, Fastmail, Zoho, iCloud, or your own server.</p>
-${links}
-<section><h2>How it works</h2>
-<ol>
-<li>Create an OpenMail account.</li>
-<li>Add one or more mailboxes. OpenMail signs in once to check the details before saving them.</li>
-<li>Create an API key and add OpenMail to your agent as an MCP server.</li>
+    "OpenMail: connect any email inbox to your AI assistant",
+    `${notice}
+<section class="hero"><div class="container hero-inner">
+<div class="hero-copy">
+<p class="eyebrow">Email for AI assistants</p>
+<h1>Connect any email inbox to your AI assistant</h1>
+<p class="lead">Works with any IMAP provider. Read-only, and nothing is stored: your assistant searches and reads your mail live, over a secure MCP connection.</p>
+<div class="cta">${primary}<a class="btn btn-secondary btn-lg" href="#how">How it works</a></div>
+<ul class="hero-points" aria-label="Highlights"><li>${icon("check")}Any IMAP provider</li><li>${icon("check")}Read-only</li><li>${icon("check")}No email stored</li></ul>
+</div>
+<div class="hero-art" aria-hidden="true">
+<div class="mock">
+<div class="mock-bar"><span></span><span></span><span></span></div>
+<div class="mock-body">
+<p class="bubble bubble-user">Summarize unread emails from today</p>
+<p class="bubble bubble-tool"><span class="tool-chip">search_messages</span> unread, since today · 4 results</p>
+<p class="bubble bubble-bot">You have 4 unread emails: a delivery update, a meetup reminder, a reply about the Q4 offsite, and a sale newsletter.</p>
+</div></div>
+<img class="hero-logo" src="/logo.svg" alt="" width="120" height="120">
+</div>
+</div></section>
+
+<section id="how" class="section"><div class="container">
+<h2 class="section-title">How it works</h2>
+<p class="section-lead">Three steps, about two minutes.</p>
+<ol class="steps">
+<li class="card step">${icon("user")}<h3>Create an account</h3><p>Sign up with an email and password. No credit card.</p></li>
+<li class="card step">${icon("inbox")}<h3>Add your mailboxes</h3><p>Pick a preset or enter any IMAP server. OpenMail tests the connection before saving, then encrypts the password.</p></li>
+<li class="card step">${icon("key")}<h3>Connect Grok Bot</h3><p>Create an API key in your dashboard and add OpenMail as a connector in Grok Bot.</p></li>
 </ol>
-</section>
-<section><h2>Privacy in short</h2>
-<ul>
-<li><strong>Read-only.</strong> Agents can list folders, search, and read messages. They cannot send, delete, move, or flag mail, and reading does not mark messages as read.</li>
-<li><strong>No mail is stored.</strong> Messages are fetched from your provider when your agent asks and are not kept on OpenMail's servers.</li>
-<li><strong>Passwords are encrypted.</strong> Mailbox passwords are encrypted with a key unique to your account and are never shown again, logged, or sent to the agent.</li>
+</div></section>
+
+<section id="connect" class="section section-tint"><div class="container narrow">
+<h2 class="section-title">Connect to Grok Bot</h2>
+<ol class="guide-steps">
+<li><a href="/signup">Sign up</a>, add a mailbox, then create an API key on your dashboard. Copy it: it is shown only once.</li>
+<li>In Grok Bot, install OpenMail from the connector list, or add a custom MCP connector (streamable HTTP) with:</li>
+</ol>
+<div class="copy-block">
+${copyField("MCP URL", MCP_ENDPOINT, "copy-url")}
+${copyField("Header", "Authorization: Bearer <your key>", "copy-header")}
+</div>
+<ol class="guide-steps" start="3"><li>Ask Grok Bot something about your email. Revoke the key any time from your dashboard.</li></ol>
+</div></section>
+
+<section id="ask" class="section"><div class="container">
+<h2 class="section-title">What you can ask</h2>
+<p class="section-lead">Ask Grok Bot in plain language. It picks the right tools.</p>
+<ul class="prompts">
+<li class="card prompt">${icon("chat")}<span>“Find invoices from last month”</span></li>
+<li class="card prompt">${icon("chat")}<span>“Summarize unread emails from today”</span></li>
+<li class="card prompt">${icon("chat")}<span>“Show the thread with Acme about the contract”</span></li>
 </ul>
-<p>Use an app-specific password where your provider offers one. Read the full <a href="/privacy">privacy policy</a>.</p>
-</section>`,
-    input.csrf ? { csrf: input.csrf } : {},
+</div></section>
+
+<section id="tools" class="section section-tint"><div class="container">
+<h2 class="section-title">Tools</h2>
+<p class="section-lead">Five read-only MCP tools.</p>
+<div class="tools">${tools.map(([name, text]) => `<div class="card tool"><code>${name}</code><p>${text}</p></div>`).join("")}</div>
+</div></section>
+
+<section id="security" class="section"><div class="container">
+<h2 class="section-title">Security &amp; privacy</h2>
+<p class="section-lead">Built to be safe to connect to an inbox.</p>
+<ul class="features">${security.map(([i, title, text]) => `<li class="feature">${icon(i)}<div><h3>${title}</h3><p>${text}</p></div></li>`).join("")}</ul>
+</div></section>
+
+<section id="providers" class="section section-tint"><div class="container">
+<h2 class="section-title">Works with</h2>
+<ul class="badges" aria-label="Supported providers"><li>Migadu</li><li>Fastmail</li><li>Zoho Mail</li><li>iCloud Mail</li><li>Any IMAP server</li></ul>
+</div></section>
+
+<section id="faq" class="section"><div class="container narrow">
+<h2 class="section-title">FAQ</h2>
+<div class="faq">${faq.map(([q, a]) => `<details><summary>${q}</summary><p>${a}</p></details>`).join("")}</div>
+</div></section>
+
+<section class="section cta-band"><div class="container cta-band-inner">
+<h2>Give your assistant your inbox, safely</h2>
+<div class="cta">${primary}<a class="btn btn-secondary btn-lg" href="/reviewers">Reviewer guide</a></div>
+</div></section>`,
+    { ...(input.csrf ? { csrf: input.csrf } : {}), landing: true, path: "/" },
   );
 }
 
 export function privacyPage(options: { csrf?: string } = {}): string {
   return layout(
     "Privacy policy · OpenMail",
-    `<h1>Privacy policy</h1>
+    `<article class="prose"><h1>Privacy policy</h1>
 <p class="muted">Last updated October 2026</p>
 <p>OpenMail is a connector that lets AI agents read your email through the Model Context Protocol (MCP). This page explains what OpenMail keeps and what it does not.</p>
 <h2>What we store</h2>
@@ -90,19 +245,23 @@ export function privacyPage(options: { csrf?: string } = {}): string {
 <h2>Changes</h2>
 <p>If this policy changes, the date above changes too. Material changes will be announced on this site.</p>
 <h2>Contact</h2>
-<p><a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a></p>`,
-    options,
+<p><a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a></p></article>`,
+    { ...options, path: "/privacy", description: "What OpenMail stores, what it does not, and how your mailbox credentials are protected." },
   );
 }
 
 export function reviewersPage(guideHtml: string, options: { csrf?: string } = {}): string {
-  return layout("Reviewer guide · OpenMail", `<article class="guide">${guideHtml}</article>`, options);
+  return layout("Reviewer guide · OpenMail", `<article class="prose guide">${guideHtml}</article>`, {
+    ...options,
+    path: "/reviewers",
+    description: "How marketplace reviewers can test the OpenMail connector.",
+  });
 }
 
 export function termsPage(options: { csrf?: string } = {}): string {
   return layout(
     "Terms of service · OpenMail",
-    `<h1>Terms of service</h1>
+    `<article class="prose"><h1>Terms of service</h1>
 <p class="muted">Last updated October 2026</p>
 <p>By creating an OpenMail account or using an OpenMail API key you agree to these terms.</p>
 <h2>The service</h2>
@@ -121,8 +280,8 @@ export function termsPage(options: { csrf?: string } = {}): string {
 <h2>Ending use</h2>
 <p>You can stop at any time by revoking your keys and removing your mailboxes, or by asking us to delete your account. We may end the service with reasonable notice.</p>
 <h2>Contact</h2>
-<p><a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a></p>`,
-    options,
+<p><a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a></p></article>`,
+    { ...options, path: "/terms", description: "The terms for using OpenMail." },
   );
 }
 
@@ -139,16 +298,25 @@ export function authPage(input: {
   const other = signup
     ? `<p>Already have an account? <a href="/login">Log in</a></p>`
     : `<p>No account yet? <a href="/signup">Sign up</a></p>`;
+  const intro = signup
+    ? "Create a free account, then add a mailbox and an API key."
+    : "Welcome back. Log in to manage your mailboxes and keys.";
   return layout(
-    title,
-    `${errorBlock(input.errors)}<h1>${title}</h1>
+    `${title} · OpenMail`,
+    `<div class="auth"><div class="card auth-card">
+<a class="auth-logo" href="/"><img src="/logo.svg" alt="OpenMail" width="56" height="56"></a>
+<h1>${title}</h1><p class="muted">${intro}</p>
+${errorBlock(input.errors)}
 <form class="stack" method="post" action="${action}">
 <input type="hidden" name="_csrf" value="${escapeHtml(input.csrf)}">
 <label>Email <input name="email" type="email" autocomplete="username" maxlength="254" value="${escapeHtml(input.email ?? "")}" required></label>
 <label>Password <input name="password" type="password" autocomplete="${signup ? "new-password" : "current-password"}" minlength="${signup ? "10" : "1"}" maxlength="200" required></label>
-<button type="submit">${button}</button>
+<button class="btn btn-primary btn-block" type="submit">${button}</button>
 </form>
-${other}`,
+<div class="auth-other">${other}</div>
+${signup ? '<p class="fine">By signing up you agree to the <a href="/terms">terms</a> and <a href="/privacy">privacy policy</a>.</p>' : ""}
+</div></div>`,
+    { path: action, description: signup ? "Create a free OpenMail account." : "Log in to OpenMail." },
   );
 }
 
@@ -167,34 +335,40 @@ export function dashboardPage(input: {
     input.probeMessage ? `<div class="notice"><p>${escapeHtml(input.probeMessage)}</p></div>` : ""
   }${errorBlock(input.errors)}`;
   return layout(
-    "Dashboard",
-    `${alerts}<h1>Dashboard</h1><p class="muted">Signed in as ${escapeHtml(input.email)}</p>
-${accountList(input.accounts, input.csrf)}
-${accountForm(input.draft, input.csrf)}
-${keyList(input.keys, input.csrf)}
-${keyForm(input.csrf)}
-${grokSection(input.mcpUrl)}`,
-    { csrf: input.csrf, script: true },
+    "Dashboard · OpenMail",
+    `<div class="dash-head"><div><h1>Dashboard</h1><p class="muted">Signed in as ${escapeHtml(input.email)}</p></div></div>
+${alerts}
+<div class="dash-grid">
+<div class="card">${accountList(input.accounts, input.csrf)}</div>
+<div class="card">${accountForm(input.draft, input.csrf)}</div>
+<div class="card">${keyList(input.keys, input.csrf)}${keyForm(input.csrf)}</div>
+<div class="card">${grokSection(input.mcpUrl)}</div>
+</div>`,
+    { csrf: input.csrf, script: true, path: "/dashboard" },
   );
 }
 
 export function keyRevealPage(input: { csrf: string; name: string; token: string; prefix: string }): string {
   return layout(
-    "API key created",
-    `<h1>API key created</h1>
-<p>Copy this key now. OpenMail stores only a hash and will not show it again.</p>
-<p><span class="muted">Name</span> ${escapeHtml(input.name)}</p>
-<p><span class="muted">Prefix</span> <code>${escapeHtml(input.prefix)}</code></p>
-<pre><code id="new-api-key">${escapeHtml(input.token)}</code></pre>
-<p><span class="muted">Header</span></p>
-<pre><code>Authorization: Bearer ${escapeHtml(input.token)}</code></pre>
-<p><a class="button" href="/dashboard">Back to dashboard</a></p>`,
+    "API key created · OpenMail",
+    `<div class="card reveal">
+<h1>API key created</h1>
+<div class="notice warn" role="status"><p>Copy this key now. OpenMail stores only a hash and will not show it again.</p></div>
+<p><span class="muted">Name</span> ${escapeHtml(input.name)} · <span class="muted">Prefix</span> <code>${escapeHtml(input.prefix)}</code></p>
+${copyField("API key", input.token, "new-api-key")}
+${copyField("Header", `Authorization: Bearer ${input.token}`, "new-api-header")}
+${copyField("MCP URL", MCP_ENDPOINT, "new-api-url")}
+<p><a class="btn btn-primary" href="/dashboard">Back to dashboard</a></p>
+</div>`,
     { csrf: input.csrf },
   );
 }
 
 export function statusPage(title: string, text: string, statusHint?: string): string {
-  return layout(title, `<h1>${escapeHtml(title)}</h1><p>${escapeHtml(text)}</p>${statusHint ? `<p class="muted">${escapeHtml(statusHint)}</p>` : ""}`);
+  return layout(
+    `${title} · OpenMail`,
+    `<div class="card status"><h1>${escapeHtml(title)}</h1><p>${escapeHtml(text)}</p>${statusHint ? `<p class="muted">${escapeHtml(statusHint)}</p>` : ""}<p><a class="btn btn-secondary" href="/">Home</a></p></div>`,
+  );
 }
 
 function errorBlock(errors: string[] | undefined): string {
@@ -279,11 +453,11 @@ function keyForm(csrf: string): string {
 }
 
 function grokSection(mcpUrl: string | null): string {
-  const url = mcpUrl ? escapeHtml(mcpUrl) : "Set OPENMAIL_PUBLIC_URL";
+  const url = mcpUrl ?? "Set OPENMAIL_PUBLIC_URL";
   return `<section id="grok"><h2>Connect to Grok Bot</h2>
 <p>Create an API key above, then add OpenMail to Grok Bot as a custom MCP connector (streamable HTTP) with this URL and header. Tools: list_accounts, list_folders, search_messages, read_message, read_thread.</p>
-<p><span class="muted">MCP URL</span> <code>${url}</code></p>
-<p><span class="muted">Header</span> <code>${escapeHtml("Authorization: Bearer <your key>")}</code></p>
+${copyField("MCP URL", url, "dash-url")}
+${copyField("Header", "Authorization: Bearer <your key>", "dash-header")}
 </section>`;
 }
 

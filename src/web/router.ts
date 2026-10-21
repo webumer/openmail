@@ -163,6 +163,8 @@ function isWebPath(pathname: string): boolean {
     pathname === "/keys" ||
     pathname === "/static/style.css" ||
     pathname === "/static/app.js" ||
+    pathname === "/static/site.js" ||
+    pathname === "/og.png" ||
     ACCOUNT_DELETE.test(pathname) ||
     KEY_REVOKE.test(pathname)
   );

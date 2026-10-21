@@ -135,7 +135,7 @@ Secrets come from stdin or a named environment variable, never from arguments, a
 
 ## Public pages
 
-`/` (landing), `/privacy`, `/terms`, `/reviewers` (marketplace reviewer guide), `/logo.svg`, `/logo.png`.
+`/` (landing), `/privacy`, `/terms`, `/reviewers` (marketplace reviewer guide), `/logo.svg`, `/logo.png`, `/og.png` (1200×630 social preview). The landing page is server-rendered HTML with one stylesheet and a tiny copy-button script (`/static/site.js`), no external assets, light and dark mode.
 
 ## Tests
 

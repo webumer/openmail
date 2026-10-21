@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 const FILES = new Map<string, { type: string; body: Buffer }>([
   ["/static/style.css", { type: "text/css; charset=utf-8", body: readStatic("style.css") }],
   ["/static/app.js", { type: "text/javascript; charset=utf-8", body: readStatic("app.js") }],
+  ["/static/site.js", { type: "text/javascript; charset=utf-8", body: readStatic("site.js") }],
+  ["/og.png", { type: "image/png", body: readStatic("og.png") }],
   ["/logo.svg", { type: "image/svg+xml", body: readStatic("logo.svg") }],
   ["/logo.png", { type: "image/png", body: readStatic("logo.png") }],
   ["/favicon.ico", { type: "image/png", body: readStatic("logo.png") }],
