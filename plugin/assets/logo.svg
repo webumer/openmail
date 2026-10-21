@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>OpenMail</title>
+  <rect width="512" height="512" rx="112" fill="#0E7C66"/>
+  <!-- open flap -->
+  <path d="M104 236 L256 116 L408 236 Z" fill="#8FE3C9" stroke="#8FE3C9" stroke-width="16" stroke-linejoin="round"/>
+  <!-- envelope body -->
+  <rect x="96" y="220" width="320" height="196" rx="28" fill="#FFFFFF"/>
+  <!-- inner fold -->
+  <path d="M128 252 L256 340 L384 252" fill="none" stroke="#0E7C66" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

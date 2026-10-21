@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "openmail": {
+      "url": "https://mcp.openmail.tools/mcp",
+      "headers": {
+        "Authorization": "Bearer ${OPENMAIL_API_KEY}"
+      }
+    }
+  }
+}
