@@ -1,0 +1,44 @@
+# OpenMail example configuration.
+# Copy to config.toml (gitignored) and set secrets in the environment.
+# Never put passwords, API keys, or tokens in this file.
+
+# Plain IMAP (secure = false) is refused unless the host is localhost,
+# 127.0.0.1, or ::1 AND this flag is true. TLS certificate verification stays
+# on whenever TLS is used (rejectUnauthorized is never disabled).
+allow_insecure_localhost = false
+
+[server]
+host = "127.0.0.1"
+port = 8080
+
+# API keys are read from the environment, not from this file:
+#   OPENMAIL_API_KEYS="replace-with-comma-separated-keys"
+# The server compares SHA-256 hashes. Do not put key values here.
+
+[[accounts]]
+id = "work"
+label = "Work"
+email = "you@example.com"
+preset = "migadu" # migadu | fastmail | zoho | icloud | custom
+# Name of an environment variable that holds the password. The value stays in
+# the environment and is never written here.
+password_env = "OPENMAIL_ACCT_WORK_PASSWORD"
+# username defaults to email
+# username = "you@example.com"
+# zoho_region = "com" # com | eu | in — only for preset = "zoho"
+# EU: imap.zoho.eu / smtp.zoho.eu
+# IN: imap.zoho.in / smtp.zoho.in
+
+# Custom preset: set host and port explicitly.
+# [[accounts]]
+# id = "custom-example"
+# label = "Custom"
+# email = "person@example.com"
+# preset = "custom"
+# password_env = "OPENMAIL_ACCT_CUSTOM_PASSWORD"
+# imap_host = "imap.example.com"
+# imap_port = 993
+# imap_secure = true
+# smtp_host = "smtp.example.com"
+# smtp_port = 465
+# smtp_secure = true
