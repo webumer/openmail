@@ -113,7 +113,7 @@ docker compose exec -T openmail node dist/cli/admin.js add-account \
 ```
 
 OpenMail seeds the demo mailbox with fictional messages on start and re-checks
-every 10 minutes, so it refills itself after GreenMail restarts.
+every 2 minutes (`OPENMAIL_DEMO_RESEED_SECONDS`), so it refills itself after GreenMail restarts.
 
 ### Moving from single-user mode
 

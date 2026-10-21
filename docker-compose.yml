@@ -42,6 +42,9 @@ services:
   demo-mail:
     image: greenmail/standalone:2.1.3
     restart: unless-stopped
+    # The image's own start script echoes GREENMAIL_OPTS (which holds the demo
+    # password) to the log. Start java directly instead.
+    entrypoint: ["/bin/sh", "-c", "exec java $$JAVA_OPTS $$GREENMAIL_OPTS -jar greenmail-standalone.jar"]
     environment:
       GREENMAIL_OPTS: >-
         -Dgreenmail.setup.test.imap

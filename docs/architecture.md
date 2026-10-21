@@ -51,7 +51,7 @@ Same process and port for everything:
 
 ## Reviewer demo mailbox
 
-The production compose file can run GreenMail (`demo-mail`) on an `internal: true` Docker network with no published ports. Only the OpenMail container shares that network. `OPENMAIL_DEMO_*` settings make OpenMail seed fictional messages at startup and every 10 minutes (GreenMail keeps mail in memory, so a restart is refilled automatically). The seeder appends only messages whose Message-ID is missing.
+The production compose file can run GreenMail (`demo-mail`) on an `internal: true` Docker network with no published ports. Only the OpenMail container shares that network. `OPENMAIL_DEMO_*` settings make OpenMail seed fictional messages at startup and every 2 minutes (`OPENMAIL_DEMO_RESEED_SECONDS`) (GreenMail keeps mail in memory, so a restart is refilled automatically). The seeder appends only messages whose Message-ID is missing.
 
 ## Mail access
 

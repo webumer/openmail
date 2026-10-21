@@ -125,7 +125,14 @@ async function messageIdsIn(client: ImapFlow, folder: string): Promise<Set<strin
  * container restart empties it; this re-checks on a timer and refills.
  * Logs counts only, never message content or credentials.
  */
-export function startDemoSeeder(config: DemoMailboxConfig, intervalMs = 10 * 60_000): () => void {
+export const DEFAULT_RESEED_MS = 2 * 60_000;
+
+export function reseedIntervalFromEnv(env: Record<string, string | undefined>): number {
+  const seconds = Number(env.OPENMAIL_DEMO_RESEED_SECONDS ?? "");
+  return Number.isInteger(seconds) && seconds >= 30 && seconds <= 86_400 ? seconds * 1000 : DEFAULT_RESEED_MS;
+}
+
+export function startDemoSeeder(config: DemoMailboxConfig, intervalMs = DEFAULT_RESEED_MS): () => void {
   let running = false;
   const tick = async () => {
     if (running) return;

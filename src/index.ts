@@ -33,7 +33,7 @@ import {
 } from "./store/index.js";
 import { createWebHandler, resolveSecureCookies } from "./web/index.js";
 import { parseInsecureImapHosts } from "./mail/tls.js";
-import { demoConfigFromEnv, startDemoSeeder } from "./demo/seed.js";
+import { demoConfigFromEnv, reseedIntervalFromEnv, startDemoSeeder } from "./demo/seed.js";
 
 export { loadConfig, parseConfig, resolveOpenMailMode, type AccountConfig, type AppConfig, type OpenMailMode, type ServerConfig };
 export { loadMasterKey, generateTestMasterKey } from "./crypto/index.js";
@@ -109,7 +109,7 @@ async function listenMulti(config: AppConfig | undefined): Promise<void> {
     process.env.OPENMAIL_ALLOW_INSECURE_LOCALHOST === "1" || config?.allowInsecureLocalhost === true;
   const insecureImapHosts = parseInsecureImapHosts(process.env.OPENMAIL_INSECURE_IMAP_HOSTS);
   const demo = demoConfigFromEnv(process.env, insecureImapHosts);
-  if (demo) startDemoSeeder(demo);
+  if (demo) startDemoSeeder(demo, reseedIntervalFromEnv(process.env));
   const publicUrl = process.env.OPENMAIL_PUBLIC_URL?.trim() || undefined;
   const trustProxy = process.env.OPENMAIL_TRUST_PROXY === "1";
   const secureCookies = resolveSecureCookies(process.env);
