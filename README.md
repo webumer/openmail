@@ -24,7 +24,8 @@ agent  --443/HTTPS-->  https://mcp.openmail.tools/mcp  --993/465/587-->  mailbox
 | `src/config` | Load `config.toml` (smol-toml) and validate it with zod. Passwords are env-var names, never inline values. |
 | `src/store` | `CredentialStore` interface. `ConfigCredentialStore` reads the config file and resolves each `password_env` from the environment. A per-user encrypted store is left for a later milestone. |
 | `src/mail` | Provider presets, date normalization, HTML-to-text and body caps, opaque search cursors, and the read-only IMAP operations on top of imapflow. |
-| `src/tools`, `src/server` | MCP tool definitions and the streamable-HTTP server. Not in this increment. |
+| `src/tools` | MCP tool definitions. Input is validated with zod. Descriptions warn that bodies, subjects, and headers are untrusted third-party content. |
+| `src/server` | Stateless streamable-HTTP MCP server, bearer-key auth, body limit, and per-key rate limit. |
 
 Read tools always open mailboxes read-only (`EXAMINE` via imapflow `getMailboxLock(path, { readOnly: true })`) and fetch bodies with `BODY.PEEK` (`fetchOne` / `fetch` with `source: true`), so a read does not set `\Seen`.
 
@@ -68,18 +69,48 @@ export OPENMAIL_API_KEYS="..."
 
 `config.toml` is gitignored. `config.example.toml` has placeholders only.
 
-## Development
+## Run
 
 Requires Node.js 22.
 
 ```bash
+cp config.example.toml config.toml
+export OPENMAIL_ACCT_WORK_PASSWORD="..."
+export OPENMAIL_API_KEYS="replace-with-a-long-random-key"
 npm install
-npm run typecheck
-npm test
 npm run build
+npm start
 ```
 
-`npm test` runs unit tests (`vitest run`). Integration tests against a local mail server are a later increment (`npm run test:integration`).
+`OPENMAIL_CONFIG` selects the config file. It defaults to `./config.toml`. `npm run dev` reloads `src/index.ts` while you edit. The process listens on the `[server]` host and port from that file (default `127.0.0.1:8080`).
+
+`GET /healthz` does not require a key. Every `/mcp` request must send `Authorization: Bearer <key>`. `OPENMAIL_API_KEYS` is a comma-separated list. The server stores only SHA-256 hashes of those keys and compares them with `timingSafeEqual`. A missing or unknown key is `401`. Each accepted key is limited to 60 requests per minute (`429`). Request bodies over 1 MB are rejected (`413`). Passwords, API keys, and message bodies are not logged.
+
+## Connect from Grok Bot
+
+Add a streamable HTTP MCP server:
+
+| Field | Value |
+| --- | --- |
+| URL | `https://mcp.openmail.tools/mcp` (hosted) or `http://127.0.0.1:8080/mcp` (this process) |
+| Header | `Authorization: Bearer <one key from OPENMAIL_API_KEYS>` |
+
+The header name is `Authorization` and the value is `Bearer` plus the key. The local URL works when the bot can reach that host and port. A bot running somewhere else needs an HTTPS URL it can open, with the same bearer header. `GET /healthz` on that origin stays unauthenticated.
+
+## Tests
+
+```bash
+npm run typecheck
+npm test
+npm run test:integration
+npm run test:all
+```
+
+`npm test` runs the unit tests with `vitest run`. Files under `tests/integration` are excluded unless `OPENMAIL_INTEGRATION=1`.
+
+`npm run test:integration` starts GreenMail (`greenmail/standalone:2.1.3`) with `docker compose -f docker-compose.test.yml`, waits until IMAP and SMTP accept connections, then runs `vitest run tests/integration`. Host ports default to `13143` (IMAP) and `13025` (SMTP), mapped to GreenMail's `3143` and `3025`. Override them with `OPENMAIL_TEST_IMAP_PORT` and `OPENMAIL_TEST_SMTP_PORT`. If GreenMail is not reachable, the mail tests skip and print that they were skipped. The fixture mailbox is `test` / `test` on localhost. Plain IMAP is allowed only for that loopback account when `allow_insecure_localhost` is set. No real mailbox credentials are used.
+
+`npm run test:all` runs the unit tests and then the integration tests.
 
 ## License
 
