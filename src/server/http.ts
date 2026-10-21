@@ -8,11 +8,24 @@ import { SlidingWindowRateLimit } from "./rate-limit.js";
 
 export const BODY_LIMIT_BYTES = 1024 * 1024;
 
+export interface AuthenticatedKey {
+  userId: string;
+  keyId: string;
+}
+
+export type RequestAuthenticator = (
+  authorizationHeader: string | undefined,
+) => Promise<AuthenticatedKey | null> | AuthenticatedKey | null;
+
 export interface OpenMailServerOptions {
   store: CredentialStore;
   imap: ImapGateway;
-  apiKeyHashes: readonly Buffer[];
+  /** Static SHA-256 hashes for single-user mode. Ignored when `authenticate` is set. */
+  apiKeyHashes?: readonly Buffer[];
+  /** User id paired with static hashes. Ignored when `authenticate` is set. */
   userId?: string;
+  /** Resolves a bearer token to a user. Multi-user mode passes a database lookup. */
+  authenticate?: RequestAuthenticator;
   rateLimit?: { limit: number; windowMs: number };
   bodyLimitBytes?: number;
 }
@@ -20,15 +33,16 @@ export interface OpenMailServerOptions {
 export function createOpenMailServer(options: OpenMailServerOptions): Server {
   const limiter = new SlidingWindowRateLimit(options.rateLimit?.limit ?? 60, options.rateLimit?.windowMs ?? 60_000);
   const bodyLimit = options.bodyLimitBytes ?? BODY_LIMIT_BYTES;
-  const userId = options.userId ?? DEFAULT_USER_ID;
-  const deps = { store: options.store, imap: options.imap, userId };
+  const authenticate =
+    options.authenticate ?? staticAuthenticator(options.apiKeyHashes ?? [], options.userId ?? DEFAULT_USER_ID);
 
   return createServer((req, res) => {
     void handle(req, res, {
-      hashes: options.apiKeyHashes,
+      authenticate,
       limiter,
       bodyLimit,
-      deps,
+      store: options.store,
+      imap: options.imap,
     }).catch(() => {
       if (res.headersSent || res.writableEnded) return;
       writeJson(res, 500, { ok: false, error: { code: "internal_error", message: "Internal server error" } });
@@ -56,10 +70,19 @@ export function listenOn(server: Server, port: number, host: string): Promise<{ 
 }
 
 interface HandlerDeps {
-  hashes: readonly Buffer[];
+  authenticate: RequestAuthenticator;
   limiter: SlidingWindowRateLimit;
   bodyLimit: number;
-  deps: { store: CredentialStore; imap: ImapGateway; userId: string };
+  store: CredentialStore;
+  imap: ImapGateway;
+}
+
+function staticAuthenticator(hashes: readonly Buffer[], userId: string): RequestAuthenticator {
+  return (authorizationHeader) => {
+    const auth = authorizeRequest(authorizationHeader, hashes);
+    if (!auth.ok) return null;
+    return { userId, keyId: auth.keyId };
+  };
 }
 
 async function handle(req: IncomingMessage, res: ServerResponse, options: HandlerDeps): Promise<void> {
@@ -82,8 +105,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: Handle
     return;
   }
 
-  const auth = authorizeRequest(req.headers.authorization, options.hashes);
-  if (!auth.ok) {
+  const principal = await options.authenticate(req.headers.authorization);
+  if (!principal) {
     drain(req);
     writeJson(
       res,
@@ -93,7 +116,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: Handle
     );
     return;
   }
-  if (!options.limiter.allow(auth.keyId)) {
+  if (!options.limiter.allow(principal.keyId)) {
     drain(req);
     writeJson(
       res,
@@ -127,7 +150,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: Handle
     return;
   }
 
-  const mcp = createMailMcpServer(options.deps);
+  const mcp = createMailMcpServer({ store: options.store, imap: options.imap, userId: principal.userId });
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
