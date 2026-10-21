@@ -23,8 +23,9 @@ export interface AccountCredentials {
 
 /**
  * Per-user credential lookup.
- * TODO(M3): replace the config-backed stub with a per-user encrypted store.
- * The M1 implementation returns the single config tenant for every user id.
+ * `ConfigCredentialStore` ignores user id and serves single-user mode.
+ * `SqliteCredentialStore` returns only that user's accounts and decrypts the
+ * mailbox password when a connection is opened.
  */
 export interface CredentialStore {
   listAccounts(userId: string): Promise<AccountSummary[]>;

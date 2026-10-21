@@ -61,6 +61,7 @@ const AccountSchema = z
 
 const ConfigSchema = z
   .object({
+    mode: z.enum(["single", "multi"]).default("multi"),
     server: z
       .object({
         host: z.string().min(1).default("127.0.0.1"),
@@ -86,6 +87,8 @@ const ConfigSchema = z
     });
   });
 
+export type OpenMailMode = "single" | "multi";
+
 export interface ServerConfig {
   host: string;
   port: number;
@@ -109,6 +112,7 @@ export interface AccountConfig {
 }
 
 export interface AppConfig {
+  mode: OpenMailMode;
   server: ServerConfig;
   allowInsecureLocalhost: boolean;
   accounts: AccountConfig[];
@@ -120,6 +124,7 @@ export function parseConfig(input: unknown): AppConfig {
     throw new MailError("config_error", formatIssues(result.error.issues));
   }
   return {
+    mode: result.data.mode,
     server: { host: result.data.server.host, port: result.data.server.port },
     allowInsecureLocalhost: result.data.allow_insecure_localhost,
     accounts: result.data.accounts.map((account) => ({
