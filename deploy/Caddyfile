@@ -1,0 +1,17 @@
+{$OPENMAIL_DOMAIN:mcp.openmail.tools} {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+	reverse_proxy openmail:8080 {
+		# MCP streamable HTTP uses SSE; send bytes as soon as they arrive.
+		flush_interval -1
+	}
+	log {
+		output stdout
+		format console
+		# Never log Authorization headers.
+	}
+}

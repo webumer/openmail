@@ -7,3 +7,4 @@ data/
 config.toml
 coverage/
 *.tsbuildinfo
+!.env.example

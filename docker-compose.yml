@@ -1,0 +1,57 @@
+# OpenMail production stack: the MCP server plus Caddy for HTTPS.
+# Secrets live in ./.env on the server (gitignored, chmod 600). See docs/deploy.md.
+name: openmail
+
+services:
+  openmail:
+    build: .
+    image: openmail:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      OPENMAIL_CONFIG: /config/config.toml
+      OPENMAIL_DB_PATH: /data/openmail.db
+    volumes:
+      - ./deploy/openmail.toml:/config/config.toml:ro
+      - openmail-data:/data
+    # No published ports: only Caddy reaches it over the private Docker network.
+    # That network is not "internal: true" because OpenMail must open outbound
+    # IMAP/SMTP connections (993/465/587) to mailbox providers.
+    expose:
+      - "8080"
+    networks:
+      - backend
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      openmail:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      OPENMAIL_DOMAIN: ${OPENMAIL_DOMAIN:-mcp.openmail.tools}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - backend
+
+networks:
+  backend: {}
+
+volumes:
+  openmail-data:
+  caddy-data:
+  caddy-config:
