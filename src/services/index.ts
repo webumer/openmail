@@ -1,5 +1,5 @@
 import { create as createUser, verifyPassword } from "./users.js";
-import { create as createApiKey, list as listApiKeys, resolve as resolveApiKey, revoke as revokeApiKey } from "./api-keys.js";
+import { create as createApiKey, importToken as importApiKey, list as listApiKeys, resolve as resolveApiKey, revoke as revokeApiKey } from "./api-keys.js";
 import { add as addMailAccount, list as listMailAccounts, remove as removeMailAccount } from "./mail-accounts.js";
 
 export const users = {
@@ -9,6 +9,7 @@ export const users = {
 
 export const apiKeys = {
   create: createApiKey,
+  importToken: importApiKey,
   list: listApiKeys,
   revoke: revokeApiKey,
   resolve: resolveApiKey,

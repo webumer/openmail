@@ -1,6 +1,6 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import type Database from "better-sqlite3";
-import { generateApiKey, hashApiKey } from "../crypto/api-key.js";
+import { API_KEY_PREFIX_LENGTH, generateApiKey, hashApiKey } from "../crypto/api-key.js";
 import { MailError } from "../errors.js";
 import { requireId, requireLabel } from "./validate.js";
 
@@ -50,6 +50,37 @@ export function create(db: Database, input: { userId: string; name: string }): C
      VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)`,
   ).run(id, userId, name, generated.prefix, generated.keyHash, createdAt);
   return { id, name, prefix: generated.prefix, token: generated.token, createdAt };
+}
+
+/**
+ * Register an existing bearer token (for example one issued in single-user
+ * mode) as a key of this user. Only its SHA-256 hash and display prefix are
+ * stored. Used by the admin CLI for migrations; the web app always generates.
+ */
+export function importToken(
+  db: Database,
+  input: { userId: string; name: string; token: string },
+): Omit<CreatedApiKey, "token"> {
+  const userId = requireId(input.userId, "userId");
+  const name = requireLabel(input.name, "Key name");
+  const token = typeof input.token === "string" ? input.token.trim() : "";
+  if (token.length < 32 || token.length > 200 || /\s/.test(token)) {
+    throw new MailError("invalid_input", "Imported key must be 32 to 200 characters with no spaces");
+  }
+  const user = db.prepare("SELECT id FROM users WHERE id = ?").get(userId);
+  if (!user) throw new MailError("not_found", "User was not found");
+  const keyHash = hashApiKey(token);
+  if (db.prepare("SELECT id FROM api_keys WHERE key_hash = ?").get(keyHash)) {
+    throw new MailError("conflict", "That key is already registered");
+  }
+  const id = randomUUID();
+  const createdAt = new Date().toISOString();
+  const prefix = token.slice(0, API_KEY_PREFIX_LENGTH);
+  db.prepare(
+    `INSERT INTO api_keys (id, user_id, name, prefix, key_hash, created_at, last_used_at, revoked_at)
+     VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)`,
+  ).run(id, userId, name, prefix, keyHash, createdAt);
+  return { id, name, prefix, createdAt };
 }
 
 export function list(db: Database, userId: string): ApiKeySummary[] {

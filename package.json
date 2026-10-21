@@ -1,6 +1,6 @@
 {
   "name": "openmail",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Hosted, provider-agnostic IMAP/SMTP MCP server for AI agents",
   "type": "module",
   "license": "MIT",
@@ -8,7 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && mkdir -p dist/web/static && cp src/web/static/* dist/web/static/",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "test": "vitest run",

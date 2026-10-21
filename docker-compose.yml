@@ -1,4 +1,5 @@
-# OpenMail production stack: the MCP server plus Caddy for HTTPS.
+# OpenMail production stack: the MCP server, Caddy for HTTPS, and an
+# internal-only GreenMail demo mailbox for marketplace reviewers.
 # Secrets live in ./.env on the server (gitignored, chmod 600). See docs/deploy.md.
 name: openmail
 
@@ -11,16 +12,23 @@ services:
     environment:
       OPENMAIL_CONFIG: /config/config.toml
       OPENMAIL_DB_PATH: /data/openmail.db
+      OPENMAIL_TRUST_PROXY: "1"
+      # Plain IMAP is allowed only for this exact internal host.
+      OPENMAIL_INSECURE_IMAP_HOSTS: demo-mail
+      OPENMAIL_DEMO_IMAP_HOST: demo-mail
+      OPENMAIL_DEMO_IMAP_PORT: "3143"
+      OPENMAIL_DEMO_IMAP_USER: demo
     volumes:
       - ./deploy/openmail.toml:/config/config.toml:ro
       - openmail-data:/data
     # No published ports: only Caddy reaches it over the private Docker network.
-    # That network is not "internal: true" because OpenMail must open outbound
+    # "backend" is not internal because OpenMail must open outbound
     # IMAP/SMTP connections (993/465/587) to mailbox providers.
     expose:
       - "8080"
     networks:
       - backend
+      - demo
     read_only: true
     tmpfs:
       - /tmp
@@ -28,6 +36,29 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+
+  # Reviewer demo mailbox. Plain IMAP on an internal network with no
+  # published ports and no internet access; only OpenMail can reach it.
+  demo-mail:
+    image: greenmail/standalone:2.1.3
+    restart: unless-stopped
+    environment:
+      GREENMAIL_OPTS: >-
+        -Dgreenmail.setup.test.imap
+        -Dgreenmail.setup.test.smtp
+        -Dgreenmail.hostname=0.0.0.0
+        -Dgreenmail.users=demo:${OPENMAIL_DEMO_PASSWORD:?set OPENMAIL_DEMO_PASSWORD in .env}@demo.openmail.tools
+      JAVA_OPTS: -Xmx192m
+    networks:
+      - demo
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/127.0.0.1/3143'"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
 
   caddy:
     image: caddy:2
@@ -41,6 +72,7 @@ services:
       - "443:443/udp"
     environment:
       OPENMAIL_DOMAIN: ${OPENMAIL_DOMAIN:-mcp.openmail.tools}
+      OPENMAIL_ROOT_DOMAIN: ${OPENMAIL_ROOT_DOMAIN:-openmail.tools}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
@@ -50,6 +82,8 @@ services:
 
 networks:
   backend: {}
+  demo:
+    internal: true
 
 volumes:
   openmail-data:

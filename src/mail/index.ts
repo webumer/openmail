@@ -31,4 +31,4 @@ export {
 export { ok, fail, type ToolFailure, type ToolResult, type ToolSuccess } from "./result.js";
 export { hasAttachments, type BodyNode } from "./structure.js";
 export { allocateText, capText, htmlToText, selectMessageText } from "./text.js";
-export { buildImapConnectOptions, isLoopbackHost } from "./tls.js";
+export { buildImapConnectOptions, isAllowlistedInsecureHost, isLoopbackHost, parseInsecureImapHosts } from "./tls.js";

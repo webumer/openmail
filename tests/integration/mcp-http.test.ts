@@ -12,7 +12,11 @@ import { ConfigCredentialStore } from "../../src/store/index.js";
 
 const KEY = "integration-test-key";
 
-describe("MCP HTTP", () => {
+/**
+ * Bearer rejection and /healthz are covered in tests/http.test.ts.
+ * This file only exercises streamable MCP tool list/call against GreenMail config.
+ */
+describe("MCP HTTP tools", () => {
   let server: Server;
   let port = 0;
 
@@ -21,33 +25,9 @@ describe("MCP HTTP", () => {
     await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
   });
 
-  it("rejects a missing or wrong bearer, serves healthz, and lists and calls tools with a valid key", async () => {
+  it("lists and calls tools with a valid key against the configured store", async () => {
     port = await start();
     const base = `http://127.0.0.1:${port}`;
-
-    const health = await fetch(`${base}/healthz`);
-    expect(health.status).toBe(200);
-    expect(await health.json()).toEqual({ ok: true });
-
-    const missing = await fetch(`${base}/mcp`, {
-      method: "POST",
-      headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
-      body: "{}",
-    });
-    expect(missing.status).toBe(401);
-
-    const wrongKey = "wrong-bearer-value";
-    const wrong = await fetch(`${base}/mcp`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        accept: "application/json, text/event-stream",
-        authorization: `Bearer ${wrongKey}`,
-      },
-      body: "{}",
-    });
-    expect(wrong.status).toBe(401);
-    expect(await wrong.text()).not.toContain(wrongKey);
 
     const client = new Client({ name: "openmail-integration", version: "0.0.0" });
     const transport = new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {

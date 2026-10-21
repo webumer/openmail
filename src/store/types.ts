@@ -19,6 +19,12 @@ export interface AccountCredentials {
   imap: ImapEndpoint;
   smtp: SmtpEndpoint;
   allowInsecureLocalhost: boolean;
+  /**
+   * Exact hostnames an operator has allowed to use plain IMAP, such as an
+   * internal demo server on a private Docker network. Never set for
+   * user-entered hosts (the web probe leaves it empty).
+   */
+  insecureImapHosts?: readonly string[];
 }
 
 /**

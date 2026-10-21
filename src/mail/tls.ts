@@ -9,6 +9,22 @@ export function isLoopbackHost(host: string): boolean {
   return LOOPBACK.has(normalized);
 }
 
+/** Exact, case-insensitive hostname match. No wildcards, no IP ranges. */
+export function isAllowlistedInsecureHost(host: string, allowlist: readonly string[] | undefined): boolean {
+  if (!allowlist || allowlist.length === 0) return false;
+  const normalized = host.trim().toLowerCase();
+  return allowlist.some((entry) => entry.trim().toLowerCase() === normalized && normalized !== "");
+}
+
+/** Parses OPENMAIL_INSECURE_IMAP_HOSTS (comma-separated exact hostnames). */
+export function parseInsecureImapHosts(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((part) => part.trim().toLowerCase())
+    .filter((part) => /^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$/.test(part));
+}
+
 /**
  * Implicit TLS is the normal path. Cleartext IMAP is allowed only for a
  * loopback host when `allow_insecure_localhost` is set (local test servers).
@@ -21,6 +37,7 @@ export function assertImapTransportAllowed(account: AccountCredentials): void {
   }
   if (account.imap.secure) return;
   if (account.allowInsecureLocalhost && isLoopbackHost(account.imap.host)) return;
+  if (isAllowlistedInsecureHost(account.imap.host, account.insecureImapHosts)) return;
   throw new MailError(
     "insecure_transport",
     "Plain IMAP is allowed only for localhost when allow_insecure_localhost is set",

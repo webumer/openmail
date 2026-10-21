@@ -22,7 +22,7 @@ import {
   type ImapGateway,
   type ToolResult,
 } from "./mail/index.js";
-import { authenticateDatabaseKey, createOpenMailServer, hashApiKeys, listenOn } from "./server/index.js";
+import { authenticateDatabaseKey, BODY_LIMIT_BYTES, createOpenMailServer, hashApiKeys, listenOn } from "./server/index.js";
 import { apiKeys, mailAccounts, users } from "./services/index.js";
 import {
   ConfigCredentialStore,
@@ -31,6 +31,9 @@ import {
   type AccountSummary,
   type CredentialStore,
 } from "./store/index.js";
+import { createWebHandler, resolveSecureCookies } from "./web/index.js";
+import { parseInsecureImapHosts } from "./mail/tls.js";
+import { demoConfigFromEnv, startDemoSeeder } from "./demo/seed.js";
 
 export { loadConfig, parseConfig, resolveOpenMailMode, type AccountConfig, type AppConfig, type OpenMailMode, type ServerConfig };
 export { loadMasterKey, generateTestMasterKey } from "./crypto/index.js";
@@ -53,7 +56,8 @@ export {
   type ImapGateway,
   type ToolResult,
 };
-export { authenticateDatabaseKey, createOpenMailServer, hashApiKeys, listenOn };
+export { authenticateDatabaseKey, BODY_LIMIT_BYTES, createOpenMailServer, hashApiKeys, listenOn };
+export { createWebHandler, resolveSecureCookies };
 
 const invoked = process.argv[1];
 if (invoked && import.meta.url === pathToFileURL(invoked).href) {
@@ -82,10 +86,16 @@ async function listenSingle(config: AppConfig): Promise<void> {
   if (apiKeyHashes.length === 0) {
     throw new Error("OPENMAIL_API_KEYS is not set");
   }
+  const publicUrl = process.env.OPENMAIL_PUBLIC_URL?.trim() || undefined;
+  const trustProxy = process.env.OPENMAIL_TRUST_PROXY === "1";
   const server = createOpenMailServer({
     store: new ConfigCredentialStore(config),
     imap: createImapGateway(),
     apiKeyHashes,
+    security: {
+      ...(publicUrl ? { publicUrl } : {}),
+      trustProxy,
+    },
   });
   const address = await listenOn(server, config.server.port, config.server.host);
   console.log(`OpenMail listening on http://${address.host}:${address.port}`);
@@ -97,10 +107,32 @@ async function listenMulti(config: AppConfig | undefined): Promise<void> {
   migrate(db);
   const allowInsecureLocalhost =
     process.env.OPENMAIL_ALLOW_INSECURE_LOCALHOST === "1" || config?.allowInsecureLocalhost === true;
+  const insecureImapHosts = parseInsecureImapHosts(process.env.OPENMAIL_INSECURE_IMAP_HOSTS);
+  const demo = demoConfigFromEnv(process.env, insecureImapHosts);
+  if (demo) startDemoSeeder(demo);
+  const publicUrl = process.env.OPENMAIL_PUBLIC_URL?.trim() || undefined;
+  const trustProxy = process.env.OPENMAIL_TRUST_PROXY === "1";
+  const secureCookies = resolveSecureCookies(process.env);
+  const imap = createImapGateway();
+  const web = createWebHandler({
+    db,
+    masterKey,
+    imap,
+    ...(publicUrl ? { publicUrl } : {}),
+    trustProxy,
+    allowInsecureLocalhost,
+    secureCookies,
+    bodyLimit: BODY_LIMIT_BYTES,
+  });
   const server = createOpenMailServer({
-    store: new SqliteCredentialStore(db, masterKey, { allowInsecureLocalhost }),
-    imap: createImapGateway(),
+    store: new SqliteCredentialStore(db, masterKey, { allowInsecureLocalhost, insecureImapHosts }),
+    imap,
     authenticate: (header) => authenticateDatabaseKey(db, header),
+    web,
+    security: {
+      ...(publicUrl ? { publicUrl } : {}),
+      trustProxy,
+    },
   });
   const host = config?.server.host ?? "127.0.0.1";
   const port = config?.server.port ?? 8080;

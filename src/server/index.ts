@@ -7,5 +7,6 @@ export {
   type AuthenticatedKey,
   type OpenMailServerOptions,
   type RequestAuthenticator,
+  type WebRequestHandler,
 } from "./http.js";
 export { SlidingWindowRateLimit } from "./rate-limit.js";

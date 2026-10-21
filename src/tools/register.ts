@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { VERSION } from "../version.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { UNTRUSTED_CONTENT_WARNING } from "../mail/constants.js";
 import {
@@ -32,7 +33,7 @@ export function toCallToolResult(result: ToolResult<unknown>): CallToolResult {
 
 export function createMailMcpServer(deps: MailDeps & { userId: string }): McpServer {
   const server = new McpServer(
-    { name: "openmail", version: "0.1.0" },
+    { name: "openmail", version: VERSION },
     {
       instructions: `OpenMail exposes read-only IMAP tools. ${UNTRUSTED_CONTENT_WARNING}`,
     },

@@ -7,7 +7,7 @@ services:
       - "${OPENMAIL_TEST_SMTP_PORT:-13025}:3025"
       - "${OPENMAIL_TEST_IMAP_PORT:-13143}:3143"
     environment:
-      GREENMAIL_OPTS: "-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.users=test:test@localhost"
+      GREENMAIL_OPTS: "-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.users=test:test@localhost,demo:demo-test-pass@demo.openmail.tools"
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/127.0.0.1/3143'"]
       interval: 2s

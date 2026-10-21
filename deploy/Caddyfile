@@ -12,6 +12,13 @@
 	log {
 		output stdout
 		format console
-		# Never log Authorization headers.
+		# Caddy redacts Authorization and Cookie headers in access logs by default.
 	}
+}
+
+# Root domain and www redirect to the app. Each site gets its own
+# certificate; if DNS is not pointed here yet, Caddy keeps retrying these two
+# with backoff in the background and the site above is unaffected.
+{$OPENMAIL_ROOT_DOMAIN:openmail.tools}, www.{$OPENMAIL_ROOT_DOMAIN:openmail.tools} {
+	redir https://{$OPENMAIL_DOMAIN:mcp.openmail.tools}{uri} permanent
 }

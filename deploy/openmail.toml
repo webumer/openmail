@@ -1,7 +1,7 @@
 # OpenMail server config used by docker-compose.yml. No secrets in this file.
-# Single-user mode: bearer keys come from OPENMAIL_API_KEYS in .env.
-# Mailbox passwords, when accounts are added, also go in .env via password_env.
-mode = "single"
+# Multi-user mode: users, mailboxes and API keys live in the SQLite database,
+# encrypted with OPENMAIL_MASTER_KEY from .env.
+mode = "multi"
 allow_insecure_localhost = false
 
 [server]
@@ -9,6 +9,3 @@ allow_insecure_localhost = false
 # only Caddy on the internal Docker network can reach it.
 host = "0.0.0.0"
 port = 8080
-
-# No accounts yet. To add one, append [[accounts]] blocks at the end of this
-# file as shown in config.example.toml, and put each password in .env.

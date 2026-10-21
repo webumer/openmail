@@ -6,6 +6,8 @@ import type { AccountCredentials, AccountSummary, CredentialStore } from "./type
 
 export interface SqliteCredentialStoreOptions {
   allowInsecureLocalhost?: boolean;
+  /** Operator allowlist for plain IMAP (see AccountCredentials.insecureImapHosts). */
+  insecureImapHosts?: readonly string[];
 }
 
 interface AccountRow {
@@ -29,6 +31,7 @@ interface AccountRow {
 export class SqliteCredentialStore implements CredentialStore {
   private readonly masterKey: Buffer;
   private readonly allowInsecureLocalhost: boolean;
+  private readonly insecureImapHosts: readonly string[];
 
   constructor(
     private readonly db: Database,
@@ -38,6 +41,7 @@ export class SqliteCredentialStore implements CredentialStore {
     if (masterKey.length !== AES_KEY_BYTES) throw new Error("Master key must be 32 bytes");
     this.masterKey = Buffer.from(masterKey);
     this.allowInsecureLocalhost = options.allowInsecureLocalhost ?? false;
+    this.insecureImapHosts = [...(options.insecureImapHosts ?? [])];
   }
 
   async listAccounts(userId: string): Promise<AccountSummary[]> {
@@ -57,15 +61,15 @@ export class SqliteCredentialStore implements CredentialStore {
   }
 
   async getAccount(userId: string, accountId: string): Promise<AccountCredentials | null> {
-    const row = this.db
-      .prepare(
-        `SELECT id, name, email, username, preset,
+    // Agents may pass the id or the account name (names are unique per user).
+    // Both lookups are scoped to this user, so another user's rows never match.
+    const columns = `SELECT id, name, email, username, preset,
                 imap_host, imap_port, imap_secure,
                 smtp_host, smtp_port, smtp_secure, smtp_starttls,
                 password_ciphertext, password_iv, password_tag
-         FROM mail_accounts WHERE user_id = ? AND id = ?`,
-      )
-      .get(userId, accountId) as AccountRow | undefined;
+         FROM mail_accounts`;
+    const row = (this.db.prepare(`${columns} WHERE user_id = ? AND id = ?`).get(userId, accountId) ??
+      this.db.prepare(`${columns} WHERE user_id = ? AND name = ?`).get(userId, accountId)) as AccountRow | undefined;
     if (!row) return null;
     const user = this.db.prepare("SELECT wrapped_data_key FROM users WHERE id = ?").get(userId) as
       | { wrapped_data_key: Buffer }
@@ -93,6 +97,7 @@ export class SqliteCredentialStore implements CredentialStore {
           starttls: row.smtp_starttls === 1,
         },
         allowInsecureLocalhost: this.allowInsecureLocalhost,
+        ...(this.insecureImapHosts.length > 0 ? { insecureImapHosts: this.insecureImapHosts } : {}),
       };
     } finally {
       dataKey.fill(0);

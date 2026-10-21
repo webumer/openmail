@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { ImapGateway } from "../mail/imap-gateway.js";
+import { applySecurityHeaders, type SecurityHeaderOptions } from "../web/headers.js";
 import { createMailMcpServer, DEFAULT_USER_ID } from "../tools/register.js";
 import type { CredentialStore } from "../store/types.js";
 import { authorizeRequest } from "./auth.js";
@@ -17,6 +18,9 @@ export type RequestAuthenticator = (
   authorizationHeader: string | undefined,
 ) => Promise<AuthenticatedKey | null> | AuthenticatedKey | null;
 
+/** Returns true when the request was fully handled (including error pages). */
+export type WebRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+
 export interface OpenMailServerOptions {
   store: CredentialStore;
   imap: ImapGateway;
@@ -28,6 +32,10 @@ export interface OpenMailServerOptions {
   authenticate?: RequestAuthenticator;
   rateLimit?: { limit: number; windowMs: number };
   bodyLimitBytes?: number;
+  /** Multi-user setup UI on the same origin as `/mcp` and `/healthz`. */
+  web?: WebRequestHandler;
+  /** Applied to every response, including MCP and health checks. */
+  security?: SecurityHeaderOptions;
 }
 
 export function createOpenMailServer(options: OpenMailServerOptions): Server {
@@ -43,6 +51,8 @@ export function createOpenMailServer(options: OpenMailServerOptions): Server {
       bodyLimit,
       store: options.store,
       imap: options.imap,
+      ...(options.web ? { web: options.web } : {}),
+      security: options.security ?? {},
     }).catch(() => {
       if (res.headersSent || res.writableEnded) return;
       writeJson(res, 500, { ok: false, error: { code: "internal_error", message: "Internal server error" } });
@@ -75,6 +85,8 @@ interface HandlerDeps {
   bodyLimit: number;
   store: CredentialStore;
   imap: ImapGateway;
+  web?: WebRequestHandler;
+  security: SecurityHeaderOptions;
 }
 
 function staticAuthenticator(hashes: readonly Buffer[], userId: string): RequestAuthenticator {
@@ -86,6 +98,9 @@ function staticAuthenticator(hashes: readonly Buffer[], userId: string): Request
 }
 
 async function handle(req: IncomingMessage, res: ServerResponse, options: HandlerDeps): Promise<void> {
+  applySecurityHeaders(req, res, options.security);
+  if (options.web && (await options.web(req, res))) return;
+
   const pathname = requestPath(req);
   if (pathname === "/healthz") {
     if (req.method !== "GET") {
