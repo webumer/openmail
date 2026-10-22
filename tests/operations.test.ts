@@ -147,6 +147,47 @@ describe("read-only mail operations", () => {
     expect(third.data.next_cursor).toBeNull();
   });
 
+  it("matches from/to by name or partial address when the server's FROM/TO search finds nothing", async () => {
+    const { deps, session } = harness();
+    // Like GreenMail: FROM/TO only match a full address, so a partial term returns nothing.
+    session.search = async (query) => {
+      session.searches.push(query);
+      return query.from || query.to ? [] : [5, 6, 7];
+    };
+    const people: Record<number, { name: string; address: string }> = {
+      5: { name: "Priya Raman", address: "priya@acme.example" },
+      6: { name: "Demo User", address: "demo@demo.openmail.tools" },
+      7: { name: "Leo Martins", address: "leo@acme.example" },
+    };
+    for (const uid of [5, 6, 7]) {
+      session.messages.set(uid, fetched({
+        uid,
+        envelope: { subject: "Q4 planning offsite", from: [people[uid]!], to: [{ name: "Team", address: "team@acme.example" }] },
+        bodyStructure: { type: "text/plain" },
+      }));
+    }
+    const byName = await searchMessages(deps, "user-1", "work", { subject: "offsite", from: "priya" });
+    expect(byName.ok && byName.data.messages.map((m) => m.uid)).toEqual([5]);
+    expect(session.searches[0]).toMatchObject({ subject: "offsite", from: "priya" });
+    expect(session.searches[1]).toEqual({ subject: "offsite" });
+    expect(byName.warnings.some((w) => w.includes("matched names and addresses"))).toBe(true);
+    const display = await searchMessages(deps, "user-1", "work", { from: "PRIYA RAMAN" });
+    expect(display.ok && display.data.messages.map((m) => m.uid)).toEqual([5]);
+    const domain = await searchMessages(deps, "user-1", "work", { from: "acme", to: "team" });
+    expect(domain.ok && domain.data.messages.map((m) => m.uid)).toEqual([7, 5]);
+    const none = await searchMessages(deps, "user-1", "work", { from: "nobody" });
+    expect(none.ok && none.data.messages).toEqual([]);
+  });
+
+  it("does not rescan when the server's FROM search already matched", async () => {
+    const { deps, session } = harness();
+    session.searchUids = [5];
+    session.messages.set(5, fetched({ uid: 5, envelope: { subject: "s" }, bodyStructure: { type: "text/plain" } }));
+    const result = await searchMessages(deps, "user-1", "work", { from: "priya@acme.example" });
+    expect(result.ok && result.data.messages.map((m) => m.uid)).toEqual([5]);
+    expect(session.searches).toHaveLength(1);
+  });
+
   it("filters attachments on the client after the UID page boundary", async () => {
     const { deps, session } = harness();
     session.searchUids = [1, 3, 4, 5];

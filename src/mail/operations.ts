@@ -2,6 +2,7 @@ import type { AccountCredentials, CredentialStore } from "../store/types.js";
 import { MailError } from "../errors.js";
 import { envelopeAddresses, type MailAddress } from "./addresses.js";
 import {
+  ADDRESS_SCAN_CAP,
   ATTACHMENT_SCAN_CAP,
   BODY_CHAR_CAP,
   MESSAGE_SOURCE_CAP_BYTES,
@@ -213,9 +214,12 @@ export async function searchMessages(
     const query = buildSearchQuery(params);
     const account = await requireAccount(deps.store, userId, accountId);
     return deps.imap.withMailbox(account, folder, async (session) => {
-      const uids = uniquePositive(await session.search(query));
-      const { page, hasMore, scanCapped } = await collectPage(session, uids, params.has_attachment, limit, cursor);
       const warnings = [UNTRUSTED_CONTENT_WARNING];
+      let uids = uniquePositive(await session.search(query));
+      if (uids.length === 0 && (hasText(params.from) || hasText(params.to))) {
+        uids = await addressFallback(session, params, warnings);
+      }
+      const { page, hasMore, scanCapped } = await collectPage(session, uids, params.has_attachment, limit, cursor);
       if (scanCapped) {
         warnings.push(
           `Only ${ATTACHMENT_SCAN_CAP} messages were checked for attachments; narrow the search (for example with since/before) to see older ones.`,
@@ -372,6 +376,54 @@ async function resolveThreadUids(
     for (const match of matches) found.add(match);
   }
   return [...found];
+}
+
+const ADDRESS_FETCH: MessageFetchQuery = { envelope: true };
+type EnvelopeAddress = { name?: string; address?: string };
+
+function hasText(value: string | undefined): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+/** Case-insensitive substring match on display name and address, like RFC 3501 FROM/TO. */
+export function addressMatches(list: readonly EnvelopeAddress[] | undefined, term: string): boolean {
+  const needle = term.trim().toLowerCase();
+  return (list ?? []).some((entry) =>
+    [entry.name ?? "", entry.address ?? "", `${entry.name ?? ""} <${entry.address ?? ""}>`].some((value) =>
+      value.toLowerCase().includes(needle),
+    ),
+  );
+}
+
+/**
+ * Some servers (GreenMail, for one) match FROM/TO only against the full address, so "priya" or a
+ * display name finds nothing. When FROM/TO returned no UIDs, rerun the search without them and
+ * match the envelopes of the newest ADDRESS_SCAN_CAP candidates here instead.
+ */
+async function addressFallback(session: ImapSession, params: SearchParams, warnings: string[]): Promise<number[]> {
+  const rest = uniquePositive(await session.search(buildSearchQuery({ ...params, from: undefined, to: undefined })));
+  if (rest.length === 0) return [];
+  const scan = sortNewest(rest).slice(0, ADDRESS_SCAN_CAP);
+  const matched: number[] = [];
+  const chunkSize = 200;
+  for (let index = 0; index < scan.length; index += chunkSize) {
+    const fetched = await session.fetchAll(scan.slice(index, index + chunkSize), ADDRESS_FETCH);
+    for (const message of fetched) {
+      const envelope = message.envelope;
+      if (!envelope) continue;
+      if (hasText(params.from) && !addressMatches(envelope.from, params.from)) continue;
+      if (hasText(params.to) && !addressMatches(envelope.to, params.to)) continue;
+      matched.push(message.uid);
+    }
+  }
+  if (matched.length > 0 || rest.length > scan.length) {
+    warnings.push(
+      rest.length > scan.length
+        ? `The mail server's from/to search found nothing, so OpenMail matched names and addresses in the newest ${ADDRESS_SCAN_CAP} messages itself; narrow the search (for example with since/before) to check older ones.`
+        : "The mail server's from/to search found nothing, so OpenMail matched names and addresses itself.",
+    );
+  }
+  return matched;
 }
 
 async function collectPage(

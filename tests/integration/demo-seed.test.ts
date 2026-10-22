@@ -71,6 +71,16 @@ describe.skipIf(!live)("demo mailbox seeding", () => {
     const thread = await readThread(d, "u", "demo", "INBOX", leoUid);
     expect(thread.ok && thread.data.messages.length).toBe(3);
 
+    // GreenMail matches FROM only against a full address; OpenMail falls back to matching names and parts.
+    for (const filters of [{ from: "priya", subject: "offsite" }, { from: "Priya Raman" }, { from: "PRIYA@ACME" }]) {
+      const priya = await searchMessages(d, "u", "demo", filters);
+      expect(priya.ok && priya.data.messages.map((m) => m.subject)).toEqual(["Q4 planning offsite: date and venue"]);
+    }
+    const toDemo = await searchMessages(d, "u", "demo", { to: "demo", subject: "offsite" });
+    expect(toDemo.ok && toDemo.data.messages.length).toBeGreaterThan(0);
+    const nobody = await searchMessages(d, "u", "demo", { from: "nobody-here", subject: "offsite" });
+    expect(nobody.ok && nobody.data.messages).toEqual([]);
+
     const unread = await searchMessages(d, "u", "demo", { unread: true });
     expect(unread.ok && unread.data.messages.length).toBe(expectedInbox.filter((m) => !m.seen).length);
   });
