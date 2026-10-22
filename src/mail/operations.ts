@@ -143,7 +143,7 @@ export async function listAccounts(
   return guard(async () => {
     requireUser(userId);
     const accounts = await store.listAccounts(userId);
-    const canSend = options?.canSend ?? true;
+    const canSend = options?.canSend === true;
     return ok(
       accounts.map((account) => ({
         id: account.id,

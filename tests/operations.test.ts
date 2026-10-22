@@ -60,6 +60,9 @@ describe("read-only mail operations", () => {
       data: [{ id: "work", label: "Work", email: "you@example.com", preset: "migadu", imap_host: "imap.migadu.com", sending_enabled: false }],
     });
     expect(JSON.stringify(result)).not.toContain(SECRET);
+    expect(result.ok && result.warnings).toContain("This connection is read-only");
+    const allowed = await listAccounts(store, "user-1", { canSend: true });
+    expect(allowed.ok && allowed.warnings).toEqual([]);
     expect(await listAccounts(store, "  ")).toMatchObject({ ok: false, error: { code: "invalid_argument" } });
   });
 
