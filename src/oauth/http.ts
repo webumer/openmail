@@ -4,7 +4,7 @@ import { SlidingWindowRateLimit } from "../server/rate-limit.js";
 import { mailAccounts } from "../services/index.js";
 import { SESSION_COOKIE, readCookies } from "../web/cookies.js";
 import { CONTENT_SECURITY_POLICY, overrideContentSecurityPolicy } from "../web/headers.js";
-import { consentPage, oauthErrorPage, statusPage } from "../web/pages.js";
+import { consentPage, oauthErrorPage, returnToClientPage, statusPage } from "../web/pages.js";
 import { clientAddress, readBody, requestUrl } from "../web/request.js";
 import { readSession, safeEqual } from "../web/session.js";
 import {
@@ -469,12 +469,12 @@ async function handleAuthorizePost(req: IncomingMessage, res: ServerResponse, ct
     return;
   }
   if (checked.kind === "redirect") {
-    redirectToClient(res, checked.redirectUri, ctx.config, { error: checked.error, error_description: checked.description, state: checked.state });
+    returnToClient(res, checked.redirectUri, ctx.config, { error: checked.error, error_description: checked.description, state: checked.state });
     return;
   }
   const decision = form.getAll("decision");
   if (decision.length !== 1 || decision[0] !== "allow") {
-    redirectToClient(res, checked.redirectUri, ctx.config, {
+    returnToClient(res, checked.redirectUri, ctx.config, {
       error: "access_denied",
       error_description: "The user denied access",
       state: checked.state,
@@ -489,7 +489,31 @@ async function handleAuthorizePost(req: IncomingMessage, res: ServerResponse, ct
     scope: checked.scope,
     resource: checked.resource,
   });
-  redirectToClient(res, checked.redirectUri, ctx.config, { code, state: checked.state });
+  returnToClient(res, checked.redirectUri, ctx.config, { code, state: checked.state });
+}
+
+/**
+ * After the consent form is posted, return to the client with a 200 page that
+ * navigates by Refresh header and meta refresh instead of a 303. Browsers
+ * apply CSP form-action to every hop of a form submission's redirect chain,
+ * and some clients relay their callback onward (ChatGPT's
+ * connector_platform_oauth_redirect forwards to platform.openai.com), so a
+ * 303 would be blocked even though the callback origin is allowed. A refresh
+ * is a new navigation, so the consent page keeps form-action 'self'.
+ */
+function returnToClient(
+  res: ServerResponse,
+  redirectUri: string,
+  config: OAuthConfig,
+  params: Record<string, string | undefined>,
+): void {
+  const target = new URL(redirectUri);
+  for (const [name, value] of Object.entries(params)) {
+    if (value !== undefined) target.searchParams.set(name, value);
+  }
+  target.searchParams.set("iss", config.issuer);
+  const href = target.toString().replace(/'/g, "%27");
+  writeHtml(res, 200, returnToClientPage(href), { refresh: `0; url=${href}` });
 }
 
 function redirectToClient(
