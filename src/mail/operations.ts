@@ -64,6 +64,7 @@ export interface AccountListItem {
   email: string;
   preset: string;
   imap_host: string;
+  sending_enabled: boolean;
 }
 
 export interface FolderInfo {
@@ -134,10 +135,15 @@ export interface ThreadData {
   messages: ThreadMessage[];
 }
 
-export async function listAccounts(store: CredentialStore, userId: string): Promise<ToolResult<AccountListItem[]>> {
+export async function listAccounts(
+  store: CredentialStore,
+  userId: string,
+  options?: { canSend?: boolean },
+): Promise<ToolResult<AccountListItem[]>> {
   return guard(async () => {
     requireUser(userId);
     const accounts = await store.listAccounts(userId);
+    const canSend = options?.canSend ?? true;
     return ok(
       accounts.map((account) => ({
         id: account.id,
@@ -145,7 +151,9 @@ export async function listAccounts(store: CredentialStore, userId: string): Prom
         email: account.email,
         preset: account.preset,
         imap_host: account.imapHost,
+        sending_enabled: account.sendEnabled,
       })),
+      canSend ? undefined : { warnings: ["This connection is read-only"] },
     );
   });
 }

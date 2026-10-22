@@ -1,6 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { ImapGateway } from "../mail/imap-gateway.js";
+import type { SmtpGateway } from "../mail/smtp-gateway.js";
+import type { SendRecorder } from "../services/send-log.js";
 import { applySecurityHeaders, type SecurityHeaderOptions } from "../web/headers.js";
 import { createMailMcpServer, DEFAULT_USER_ID } from "../tools/register.js";
 import type { CredentialStore } from "../store/types.js";
@@ -16,6 +18,8 @@ export const BODY_LIMIT_BYTES = 1024 * 1024;
 export interface AuthenticatedKey {
   userId: string;
   keyId: string;
+  canSend: boolean;
+  via: string;
 }
 
 export type RequestAuthenticator = (
@@ -28,6 +32,10 @@ export type WebRequestHandler = (req: IncomingMessage, res: ServerResponse) => P
 export interface OpenMailServerOptions {
   store: CredentialStore;
   imap: ImapGateway;
+  smtp: SmtpGateway;
+  sends: SendRecorder;
+  /** Shown in send-tool errors so the user can open the dashboard. */
+  publicUrl?: string;
   /** Static SHA-256 hashes for single-user mode. Ignored when `authenticate` is set. */
   apiKeyHashes?: readonly Buffer[];
   /** User id paired with static hashes. Ignored when `authenticate` is set. */
@@ -67,6 +75,9 @@ export function createOpenMailServer(options: OpenMailServerOptions): Server {
       bodyLimit,
       store: options.store,
       imap: options.imap,
+      smtp: options.smtp,
+      sends: options.sends,
+      ...(options.publicUrl ? { publicUrl: options.publicUrl } : {}),
       ...(options.web ? { web: options.web } : {}),
       security: options.security ?? {},
       challenge: options.challenge ?? (() => 'Bearer realm="openmail"'),
@@ -103,6 +114,9 @@ interface HandlerDeps {
   bodyLimit: number;
   store: CredentialStore;
   imap: ImapGateway;
+  smtp: SmtpGateway;
+  sends: SendRecorder;
+  publicUrl?: string;
   web?: WebRequestHandler;
   security: SecurityHeaderOptions;
   challenge: (invalidToken: boolean) => string;
@@ -118,10 +132,11 @@ const MCP_CORS: Record<string, string> = {
 };
 
 function staticAuthenticator(hashes: readonly Buffer[], userId: string): RequestAuthenticator {
+  const canSend = process.env.OPENMAIL_SINGLE_USER_CAN_SEND === "1";
   return (authorizationHeader) => {
     const auth = authorizeRequest(authorizationHeader, hashes);
     if (!auth.ok) return null;
-    return { userId, keyId: auth.keyId };
+    return { userId, keyId: auth.keyId, canSend, via: "api_key:config" };
   };
 }
 
@@ -213,7 +228,16 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: Handle
     return;
   }
 
-  const mcp = createMailMcpServer({ store: options.store, imap: options.imap, userId: principal.userId });
+  const mcp = createMailMcpServer({
+    store: options.store,
+    imap: options.imap,
+    smtp: options.smtp,
+    sends: options.sends,
+    userId: principal.userId,
+    canSend: principal.canSend,
+    via: principal.via,
+    ...(options.publicUrl ? { publicUrl: options.publicUrl } : {}),
+  });
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,

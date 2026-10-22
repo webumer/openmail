@@ -9,6 +9,8 @@ import { migrate, openDatabase } from "../src/db/index.js";
 import { isPrivateAddress, resolveConnectTarget } from "../src/mail/address-guard.js";
 import { MESSAGE_SOURCE_CAP_BYTES } from "../src/mail/constants.js";
 import { createImapGateway, type ImapGateway } from "../src/mail/imap-gateway.js";
+import { createSmtpGateway } from "../src/mail/smtp-gateway.js";
+import { createMemorySendRecorder } from "../src/services/send-log.js";
 import { readMessage } from "../src/mail/operations.js";
 import { IMAP_CONNECTION_TIMEOUT_MS, IMAP_SOCKET_TIMEOUT_MS } from "../src/mail/tls.js";
 import { SlidingWindowRateLimit } from "../src/server/rate-limit.js";
@@ -104,6 +106,7 @@ describe("message size limits", () => {
     const imap: ImapGateway = {
       withClient: async (_a, fn) => fn(session),
       withMailbox: async (_a, _f, fn) => fn(session),
+      appendMessage: async () => undefined,
     };
     const store: CredentialStore = { listAccounts: async () => [], getAccount: async () => account };
     const result = await readMessage({ store, imap }, "u", "work", "INBOX", 5);
@@ -170,6 +173,8 @@ describe("MCP bearer failures", () => {
     server = createOpenMailServer({
       store: new ConfigCredentialStore(parseConfig({ allow_insecure_localhost: false, accounts: [] })),
       imap: createImapGateway(),
+      smtp: createSmtpGateway(),
+      sends: createMemorySendRecorder(),
       apiKeyHashes: hashApiKeys("good-key-value"),
       authFailureLimit: { limit: 2, windowMs: 60_000 },
     });

@@ -26,6 +26,15 @@ const PRESETS = {
     smtp_secure: false,
     smtp_starttls: true,
   },
+  gmail: {
+    imap_host: "imap.gmail.com",
+    imap_port: "993",
+    imap_secure: true,
+    smtp_host: "smtp.gmail.com",
+    smtp_port: "465",
+    smtp_secure: true,
+    smtp_starttls: false,
+  },
 };
 
 const HOST_FIELDS = ["imap_host", "imap_port", "smtp_host", "smtp_port"];
@@ -55,9 +64,14 @@ function applyPreset() {
   const region = byId("zoho_region");
   const custom = preset.value === "custom";
   region.disabled = preset.value !== "zoho";
+  const security = document.getElementById("smtp_security");
   if (custom) {
     for (const id of HOST_FIELDS) byId(id).readOnly = false;
-    for (const id of CHECK_FIELDS) byId(id).disabled = false;
+    for (const id of CHECK_FIELDS) {
+      const field = document.getElementById(id);
+      if (field) field.disabled = false;
+    }
+    if (security) security.disabled = false;
     return;
   }
   const values = preset.value === "zoho" ? zohoPreset(region.value) : PRESETS[preset.value];
@@ -68,9 +82,14 @@ function applyPreset() {
     field.readOnly = true;
   }
   for (const id of CHECK_FIELDS) {
-    const field = byId(id);
+    const field = document.getElementById(id);
+    if (!field) continue;
     field.checked = values[id] === true;
     field.disabled = true;
+  }
+  if (security) {
+    security.value = values.smtp_starttls ? "starttls" : "tls";
+    security.disabled = true;
   }
 }
 

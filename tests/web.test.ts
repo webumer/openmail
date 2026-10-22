@@ -6,6 +6,8 @@ import type Database from "better-sqlite3";
 import { generateTestMasterKey, loadMasterKey } from "../src/crypto/index.js";
 import { migrate, openDatabase } from "../src/db/index.js";
 import type { ImapGateway } from "../src/mail/imap-gateway.js";
+import { createSmtpGateway } from "../src/mail/smtp-gateway.js";
+import { createMemorySendRecorder } from "../src/services/send-log.js";
 import { CONTENT_SECURITY_POLICY, HSTS_VALUE, createWebHandler } from "../src/web/index.js";
 import { authenticateDatabaseKey, createOpenMailServer } from "../src/server/index.js";
 import { SqliteCredentialStore } from "../src/store/index.js";
@@ -19,6 +21,9 @@ const imap: ImapGateway = {
     return Promise.reject(new Error("IMAP must not run in web unit tests"));
   },
   withMailbox() {
+    return Promise.reject(new Error("IMAP must not run in web unit tests"));
+  },
+  appendMessage() {
     return Promise.reject(new Error("IMAP must not run in web unit tests"));
   },
 };
@@ -291,6 +296,7 @@ describe("web setup app", () => {
       db,
       masterKey: master,
       imap,
+      smtp: createSmtpGateway(),
       publicUrl: PUBLIC_URL,
       trustProxy: false,
       allowInsecureLocalhost: false,
@@ -304,6 +310,8 @@ describe("web setup app", () => {
     server = createOpenMailServer({
       store: new SqliteCredentialStore(db, master),
       imap,
+      smtp: createSmtpGateway(),
+      sends: createMemorySendRecorder(),
       authenticate: (header) => authenticateDatabaseKey(db!, header),
       web,
       security: { publicUrl: PUBLIC_URL, trustProxy: false },

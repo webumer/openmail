@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type Database from "better-sqlite3";
 import { migrate, openDatabase, resolveDatabasePath } from "../src/db/index.js";
+import { migrations } from "../src/db/migrations/index.js";
 
 const open: Database[] = [];
 
@@ -23,13 +24,25 @@ describe("migrations", () => {
     expect(first).toEqual([
       { version: 1, applied_at: expect.any(String) },
       { version: 2, applied_at: expect.any(String) },
+      { version: 3, applied_at: expect.any(String) },
     ]);
 
     migrate(db);
     const second = db.prepare("SELECT version, applied_at FROM schema_migrations").all();
     expect(second).toEqual(first);
 
-    expect(tableNames(db)).toEqual(["api_keys", "mail_accounts", "oauth_clients", "oauth_codes", "oauth_grants", "oauth_tokens", "schema_migrations", "sessions", "users"]);
+    expect(tableNames(db)).toEqual([
+      "api_keys",
+      "mail_accounts",
+      "oauth_clients",
+      "oauth_codes",
+      "oauth_grants",
+      "oauth_tokens",
+      "schema_migrations",
+      "send_log",
+      "sessions",
+      "users",
+    ]);
     expect(columnNames(db, "users")).toEqual(["id", "email", "password_hash", "wrapped_data_key", "created_at"]);
     expect(columnNames(db, "sessions")).toEqual(["id", "user_id", "csrf_secret", "created_at", "expires_at"]);
     expect(columnNames(db, "api_keys")).toEqual([
@@ -41,6 +54,7 @@ describe("migrations", () => {
       "created_at",
       "last_used_at",
       "revoked_at",
+      "can_send",
     ]);
     expect(columnNames(db, "mail_accounts")).toEqual([
       "id",
@@ -60,7 +74,47 @@ describe("migrations", () => {
       "password_iv",
       "password_tag",
       "created_at",
+      "send_enabled",
+      "smtp_username",
+      "smtp_password_ciphertext",
+      "smtp_password_iv",
+      "smtp_password_tag",
     ]);
+  });
+
+  it("upgrades an older database and leaves existing rows read-only", () => {
+    const db = track(openDatabase(":memory:"));
+    db.exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`);
+    for (const migration of migrations) {
+      if (migration.version >= 3) break;
+      db.exec(migration.sql);
+      db.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(migration.version, "2026-01-01T00:00:00.000Z");
+    }
+    db.prepare(
+      `INSERT INTO users (id, email, password_hash, wrapped_data_key, created_at) VALUES (?, ?, ?, ?, ?)`,
+    ).run("user-1", "ada@example.com", "hash", Buffer.from("key"), "2026-01-01T00:00:00.000Z");
+    db.prepare(
+      `INSERT INTO mail_accounts (
+         id, user_id, name, email, username, preset,
+         imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure, smtp_starttls,
+         password_ciphertext, password_iv, password_tag, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "acct-1", "user-1", "Work", "ada@example.com", "ada@example.com", "migadu",
+      "imap.migadu.com", 993, 1, "smtp.migadu.com", 465, 1, 0,
+      Buffer.from("cipher"), Buffer.alloc(12), Buffer.alloc(16), "2026-01-01T00:00:00.000Z",
+    );
+    db.prepare(
+      `INSERT INTO api_keys (id, user_id, name, prefix, key_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run("key-1", "user-1", "Laptop", "om_prefix", "ab".repeat(32), "2026-01-01T00:00:00.000Z");
+    migrate(db);
+    const account = db.prepare("SELECT send_enabled, smtp_username FROM mail_accounts WHERE id = ?").get("acct-1") as {
+      send_enabled: number;
+      smtp_username: string | null;
+    };
+    const key = db.prepare("SELECT can_send FROM api_keys WHERE id = ?").get("key-1") as { can_send: number };
+    expect(account).toEqual({ send_enabled: 0, smtp_username: null });
+    expect(key.can_send).toBe(0);
   });
 
   it("creates the parent directory for a file database and enforces foreign keys", () => {

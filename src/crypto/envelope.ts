@@ -50,24 +50,46 @@ export function unwrapDataKey(masterKey: Buffer, userId: string, wrapped: Buffer
 
 /** AES-256-GCM with a fresh 12-byte IV. AAD is `account:<accountId>`. */
 export function sealPassword(dataKey: Buffer, accountId: string, password: string): SealedSecret {
-  assertAesKey(dataKey);
   assertLabel(accountId, "accountId");
+  return sealWithAad(dataKey, accountAad(accountId), password);
+}
+
+export function openPassword(dataKey: Buffer, accountId: string, sealed: SealedSecret): string {
+  assertLabel(accountId, "accountId");
+  return openWithAad(dataKey, accountAad(accountId), sealed);
+}
+
+/**
+ * SMTP password seal. AAD is `<accountId>:smtp`, which does not match the
+ * IMAP password AAD, so the two ciphertexts cannot be swapped.
+ */
+export function sealSmtpPassword(dataKey: Buffer, accountId: string, password: string): SealedSecret {
+  assertLabel(accountId, "accountId");
+  return sealWithAad(dataKey, smtpAad(accountId), password);
+}
+
+export function openSmtpPassword(dataKey: Buffer, accountId: string, sealed: SealedSecret): string {
+  assertLabel(accountId, "accountId");
+  return openWithAad(dataKey, smtpAad(accountId), sealed);
+}
+
+function sealWithAad(dataKey: Buffer, aad: Buffer, password: string): SealedSecret {
+  assertAesKey(dataKey);
   const iv = randomBytes(GCM_IV_BYTES);
   const cipher = createCipheriv("aes-256-gcm", dataKey, iv, { authTagLength: GCM_TAG_BYTES });
-  cipher.setAAD(accountAad(accountId));
+  cipher.setAAD(aad);
   const ciphertext = Buffer.concat([cipher.update(password, "utf8"), cipher.final()]);
   return { iv, tag: cipher.getAuthTag(), ciphertext };
 }
 
-export function openPassword(dataKey: Buffer, accountId: string, sealed: SealedSecret): string {
+function openWithAad(dataKey: Buffer, aad: Buffer, sealed: SealedSecret): string {
   assertAesKey(dataKey);
-  assertLabel(accountId, "accountId");
   if (sealed.iv.length !== GCM_IV_BYTES || sealed.tag.length !== GCM_TAG_BYTES) {
     throw new Error("Decryption failed");
   }
   try {
     const decipher = createDecipheriv("aes-256-gcm", dataKey, sealed.iv, { authTagLength: GCM_TAG_BYTES });
-    decipher.setAAD(accountAad(accountId));
+    decipher.setAAD(aad);
     decipher.setAuthTag(sealed.tag);
     return Buffer.concat([decipher.update(sealed.ciphertext), decipher.final()]).toString("utf8");
   } catch (err) {
@@ -81,6 +103,10 @@ function userAad(userId: string): Buffer {
 
 function accountAad(accountId: string): Buffer {
   return Buffer.from(`account:${accountId}`, "utf8");
+}
+
+function smtpAad(accountId: string): Buffer {
+  return Buffer.from(`${accountId}:smtp`, "utf8");
 }
 
 function assertAesKey(key: Buffer): void {

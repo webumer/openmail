@@ -16,13 +16,23 @@ export function isAllowlistedInsecureHost(host: string, allowlist: readonly stri
   return allowlist.some((entry) => entry.trim().toLowerCase() === normalized && normalized !== "");
 }
 
-/** Parses OPENMAIL_INSECURE_IMAP_HOSTS (comma-separated exact hostnames). */
-export function parseInsecureImapHosts(raw: string | undefined): string[] {
+/** Parses a comma-separated list of exact hostnames. No wildcards, no IPs with ports. */
+export function parseInsecureHostList(raw: string | undefined): string[] {
   if (!raw) return [];
   return raw
     .split(",")
     .map((part) => part.trim().toLowerCase())
     .filter((part) => /^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$/.test(part));
+}
+
+/** Parses OPENMAIL_INSECURE_IMAP_HOSTS (comma-separated exact hostnames). */
+export function parseInsecureImapHosts(raw: string | undefined): string[] {
+  return parseInsecureHostList(raw);
+}
+
+/** Parses OPENMAIL_INSECURE_SMTP_HOSTS the same way as the IMAP allowlist. */
+export function parseInsecureSmtpHosts(raw: string | undefined): string[] {
+  return parseInsecureHostList(raw);
 }
 
 /**
@@ -79,4 +89,78 @@ export function buildImapConnectOptions(account: AccountCredentials): ImapConnec
   };
   if (!account.imap.secure) options.doSTARTTLS = false;
   return options;
+}
+
+export const SMTP_PORTS = [465, 587, 2525] as const;
+
+export interface SmtpConnectOptions {
+  host: string;
+  port: number;
+  secure: boolean;
+  requireTLS: boolean;
+  ignoreTLS: boolean;
+  auth: { user: string; pass: string };
+  logger: false;
+  debug: false;
+  connectionTimeout: number;
+  greetingTimeout: number;
+  socketTimeout: number;
+  tls: { rejectUnauthorized: true; servername?: string };
+}
+
+/**
+ * Port 465 is implicit TLS. 587 and 2525 require STARTTLS. Any other port is
+ * plain SMTP, and only for loopback (tests) or an exact allowlisted hostname.
+ * `rejectUnauthorized` is always true; it is not a parameter.
+ */
+export function buildSmtpConnectOptions(
+  account: AccountCredentials,
+  target?: { host: string; servername?: string },
+): SmtpConnectOptions {
+  assertSmtpTransportAllowed(account);
+  const mode = smtpMode(account);
+  const options: SmtpConnectOptions = {
+    host: target?.host ?? account.smtp.host,
+    port: account.smtp.port,
+    secure: mode === "implicit",
+    requireTLS: mode === "starttls",
+    ignoreTLS: mode === "plain",
+    auth: { user: account.smtpAuth.user, pass: account.smtpAuth.pass },
+    logger: false,
+    debug: false,
+    connectionTimeout: IMAP_CONNECTION_TIMEOUT_MS,
+    greetingTimeout: IMAP_GREETING_TIMEOUT_MS,
+    socketTimeout: IMAP_SOCKET_TIMEOUT_MS,
+    tls: { rejectUnauthorized: true },
+  };
+  if (target?.servername) options.tls.servername = target.servername;
+  return options;
+}
+
+export function assertSmtpTransportAllowed(account: AccountCredentials): void {
+  if (!account.smtp.host || account.smtp.host.trim() === "") {
+    throw new MailError("insecure_transport", "SMTP host is required");
+  }
+  if (smtpMode(account) === "plain" && !plainSmtpAllowed(account)) {
+    throw new MailError(
+      "insecure_transport",
+      "Plain SMTP is allowed only for localhost when allow_insecure_localhost is set, or for an operator-listed host",
+    );
+  }
+}
+
+function smtpMode(account: AccountCredentials): "implicit" | "starttls" | "plain" {
+  const port = account.smtp.port;
+  const exception = plainSmtpAllowed(account);
+  if (port === 465 && !(exception && !account.smtp.secure && !account.smtp.starttls)) return "implicit";
+  if ((port === 587 || port === 2525) && !(exception && !account.smtp.secure && !account.smtp.starttls)) return "starttls";
+  if (exception) return "plain";
+  return "plain";
+}
+
+function plainSmtpAllowed(account: AccountCredentials): boolean {
+  return (
+    (account.allowInsecureLocalhost && isLoopbackHost(account.smtp.host)) ||
+    isAllowlistedInsecureHost(account.smtp.host, account.insecureSmtpHosts)
+  );
 }

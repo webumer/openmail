@@ -67,6 +67,9 @@ export async function seedDemoMailbox(config: DemoMailboxConfig, now = Date.now(
     imap: { host: config.host, port: config.port, secure: false },
     smtp: { host: config.host, port: 3025, secure: false, starttls: false },
     allowInsecureLocalhost: false,
+    sendEnabled: false,
+    smtpAuth: { user: config.username, pass: config.password },
+    autoSavesSent: false,
     insecureImapHosts: config.insecureImapHosts,
   };
   // Same rule as every other connection: plain IMAP only for allowlisted hosts.

@@ -27,11 +27,14 @@ function deps(allowlist: string[]): MailDeps {
     imap: { host: DEMO.host, port: DEMO.port, secure: false },
     smtp: { host: DEMO.host, port: 3025, secure: false, starttls: false },
     allowInsecureLocalhost: false,
+    sendEnabled: false,
+    smtpAuth: { user: DEMO.username, pass: DEMO.password },
+    autoSavesSent: false,
     insecureImapHosts: allowlist,
   };
   const store: CredentialStore = {
     async listAccounts() {
-      return [{ id: "demo", label: account.label, email: account.email, preset: "custom", imapHost: DEMO.host }];
+      return [{ id: "demo", label: account.label, email: account.email, preset: "custom", imapHost: DEMO.host, sendEnabled: false }];
     },
     async getAccount(_user, id) {
       return id === "demo" ? account : null;

@@ -14,6 +14,9 @@ export const account: AccountCredentials = {
   imap: { host: "imap.migadu.com", port: 993, secure: true },
   smtp: { host: "smtp.migadu.com", port: 465, secure: true, starttls: false },
   allowInsecureLocalhost: false,
+  sendEnabled: false,
+  smtpAuth: { user: "you@example.com", pass: SECRET },
+  autoSavesSent: false,
 };
 
 export function textMail(headers: Record<string, string>, body: string): Buffer {

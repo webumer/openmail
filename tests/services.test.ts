@@ -98,6 +98,7 @@ describe("mail accounts", () => {
         email: "ada@work.example",
         preset: "migadu",
         imapHost: "imap.migadu.com",
+        sendEnabled: false,
       },
     ]);
     expect(await store.getAccount(bob.id, added.id)).toBeNull();

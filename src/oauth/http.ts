@@ -17,7 +17,7 @@ import {
   type OAuthClient,
 } from "./clients.js";
 import { CimdFetchError, type DocumentFetcher } from "./cimd-fetch.js";
-import { MAIL_READ_SCOPE, SUPPORTED_SCOPES, isOurResource, parseScope, type OAuthConfig } from "./config.js";
+import { MAIL_READ_SCOPE, MAIL_SEND_SCOPE, SUPPORTED_SCOPES, isOurResource, parseScope, type OAuthConfig } from "./config.js";
 import { createAuthorizationCode, redeemAuthorizationCode, refreshGrant, revokeToken, type IssuedTokens } from "./grants.js";
 import { isLoopbackRedirect, parseRedirectUri, redirectUriAllowed } from "./redirect-uri.js";
 import { isValidCodeChallenge } from "./tokens.js";
@@ -96,7 +96,7 @@ export function protectedResourceMetadata(config: OAuthConfig): Record<string, u
   return {
     resource: config.resource,
     authorization_servers: [config.issuer],
-    scopes_supported: [MAIL_READ_SCOPE],
+    scopes_supported: [...SUPPORTED_SCOPES],
     bearer_methods_supported: ["header"],
     resource_name: "OpenMail",
     resource_documentation: `${config.issuer}/reviewers`,
@@ -110,7 +110,7 @@ export function bearerChallenge(config: OAuthConfig, invalidToken: boolean): str
   const parts = [
     'Bearer realm="openmail"',
     `resource_metadata="${config.resourceMetadataUrl}"`,
-    `scope="${MAIL_READ_SCOPE}"`,
+    `scope="${SUPPORTED_SCOPES.join(" ")}"`,
   ];
   if (invalidToken) parts.push('error="invalid_token"', 'error_description="The access token is invalid or expired"');
   return parts.join(", ");
@@ -257,7 +257,7 @@ async function handleRegister(req: IncomingMessage, res: ServerResponse, ctx: Ct
         grant_types: result.grantTypes,
         response_types: result.responseTypes,
         token_endpoint_auth_method: c.tokenEndpointAuthMethod,
-        scope: MAIL_READ_SCOPE,
+        scope: SUPPORTED_SCOPES.join(" "),
         ...(c.clientUri ? { client_uri: c.clientUri } : {}),
       },
       { ...corsHeaders(), pragma: "no-cache" },
@@ -338,7 +338,7 @@ async function validateAuthorize(params: AuthorizeParams, duplicate: boolean, ct
   }
   if (params.code_challenge_method !== "S256") return fail("invalid_request", "code_challenge_method must be S256");
   const scope = parseScope(params.scope);
-  if (!scope.ok) return fail("invalid_scope", `Supported scope: ${MAIL_READ_SCOPE}`);
+  if (!scope.ok) return fail("invalid_scope", `Supported scopes: ${SUPPORTED_SCOPES.join(" ")}`);
   if (params.resource !== undefined && !isOurResource(ctx.config, params.resource)) {
     return fail("invalid_target", `resource must be ${ctx.config.resource}`);
   }
@@ -436,6 +436,7 @@ function renderConsent(
       loopback,
       accounts: mailAccounts.list(ctx.db, session.userId),
       params: checked.normalized,
+      sendRequested: checked.scope.split(" ").includes(MAIL_SEND_SCOPE),
     }),
   );
 }
@@ -486,10 +487,19 @@ async function handleAuthorizePost(req: IncomingMessage, res: ServerResponse, ct
     userId: session.userId,
     redirectUri: checked.redirectUri,
     codeChallenge: checked.codeChallenge,
-    scope: checked.scope,
+    scope: grantedScope(checked.scope, form.get("allow_send")),
     resource: checked.resource,
   });
   redirectToClient(res, checked.redirectUri, ctx.config, { code, state: checked.state });
+}
+
+/** mail.send is granted only when it was requested and the user ticked the box. */
+function grantedScope(requested: string, allowSend: string | null): string {
+  const parts = requested.split(" ").filter((part) => part.length > 0);
+  const send = parts.includes(MAIL_SEND_SCOPE) && allowSend === "on";
+  const kept = parts.filter((part) => part !== MAIL_SEND_SCOPE || send);
+  if (!kept.includes(MAIL_READ_SCOPE)) kept.unshift(MAIL_READ_SCOPE);
+  return SUPPORTED_SCOPES.filter((scope) => kept.includes(scope)).join(" ");
 }
 
 function redirectToClient(
@@ -592,7 +602,7 @@ async function handleToken(req: IncomingMessage, res: ServerResponse, ctx: Ctx):
       let scope: string | undefined;
       if (scopeRaw !== null && scopeRaw.trim() !== "") {
         const parsed = parseScope(scopeRaw);
-        if (!parsed.ok) throw new OAuthError("invalid_scope", `Supported scope: ${MAIL_READ_SCOPE}`);
+        if (!parsed.ok) throw new OAuthError("invalid_scope", `Supported scopes: ${SUPPORTED_SCOPES.join(" ")}`);
         scope = parsed.scope;
       }
       issued = refreshGrant(ctx.db, { client, refreshToken, scope, resource });

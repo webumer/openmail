@@ -39,6 +39,8 @@ describe("oauth config", () => {
     expect(parseScope(undefined)).toEqual({ ok: true, scope: "mail.read" });
     expect(parseScope("mail.read offline_access")).toEqual({ ok: true, scope: "mail.read" });
     expect(parseScope("offline_access")).toEqual({ ok: true, scope: "mail.read" });
+    expect(parseScope("mail.send")).toEqual({ ok: true, scope: "mail.read mail.send" });
+    expect(parseScope("mail.send mail.read")).toEqual({ ok: true, scope: "mail.read mail.send" });
     expect(parseScope("mail.write")).toEqual({ ok: false });
     expect(parseScope("openid email")).toEqual({ ok: false });
   });

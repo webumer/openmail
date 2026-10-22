@@ -4,9 +4,12 @@ import type { OutgoingHttpHeaders } from "node:http";
 import type Database from "better-sqlite3";
 import { scrubSecret, toMailError, MailError } from "../errors.js";
 import type { ImapGateway } from "../mail/imap-gateway.js";
+import type { SmtpGateway } from "../mail/smtp-gateway.js";
 import { resolveEndpoints } from "../mail/presets.js";
 import { SlidingWindowRateLimit } from "../server/rate-limit.js";
 import { apiKeys, mailAccounts, users } from "../services/index.js";
+import { listSendLog } from "../services/send-log.js";
+import { SqliteCredentialStore } from "../store/sqlite-store.js";
 import type { AccountCredentials } from "../store/types.js";
 import {
   CSRF_COOKIE,
@@ -51,6 +54,9 @@ export interface WebRuntime {
   db: Database;
   masterKey: Buffer;
   imap: ImapGateway;
+  smtp: SmtpGateway;
+  insecureImapHosts?: readonly string[];
+  insecureSmtpHosts?: readonly string[];
   publicUrl?: string;
   trustProxy: boolean;
   allowInsecureLocalhost: boolean;
@@ -69,10 +75,14 @@ const NOTICES: Record<string, string> = {
   "account-added": "Mail account saved.",
   "account-removed": "Mail account removed.",
   "key-revoked": "API key revoked.",
+  "sending-on": "Sending is on for that mailbox.",
+  "sending-off": "Sending is off for that mailbox.",
   "app-revoked": "App disconnected. Its access stopped immediately.",
   "logged-out": "You have been logged out.",
 };
 
+const ACCOUNT_SENDING =
+  /^\/accounts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/sending$/i;
 const ACCOUNT_DELETE =
   /^\/accounts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/delete$/i;
 const KEY_REVOKE = /^\/keys\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/revoke$/i;
@@ -128,6 +138,7 @@ async function route(req: IncomingMessage, res: ServerResponse, url: URL, handle
     return;
   }
 
+  const accountSending = ACCOUNT_SENDING.exec(pathname);
   const accountDelete = ACCOUNT_DELETE.exec(pathname);
   const keyRevoke = KEY_REVOKE.exec(pathname);
   const appRevoke = APP_REVOKE.exec(pathname);
@@ -144,6 +155,7 @@ async function route(req: IncomingMessage, res: ServerResponse, url: URL, handle
   if (pathname === "/dashboard" && req.method === "GET") return renderDashboard(req, res, url, handler);
   if (pathname === "/accounts" && req.method === "POST") return submitAccount(req, res, url, handler, false);
   if (pathname === "/accounts/test" && req.method === "POST") return submitAccount(req, res, url, handler, true);
+  if (accountSending && req.method === "POST") return submitSending(req, res, handler, accountSending[1] ?? "");
   if (accountDelete && req.method === "POST") return submitAccountDelete(req, res, handler, accountDelete[1] ?? "");
   if (pathname === "/keys" && req.method === "POST") return submitKey(req, res, url, handler);
   if (keyRevoke && req.method === "POST") return submitKeyRevoke(req, res, handler, keyRevoke[1] ?? "");
@@ -175,13 +187,22 @@ function isWebPath(pathname: string): boolean {
     pathname === "/static/site.js" ||
     pathname === "/og.png" ||
     ACCOUNT_DELETE.test(pathname) ||
+    ACCOUNT_SENDING.test(pathname) ||
     KEY_REVOKE.test(pathname) ||
     APP_REVOKE.test(pathname)
   );
 }
 
 function allowHeader(pathname: string, accountDelete: boolean, keyRevoke: boolean): string {
-  if (pathname === "/logout" || pathname === "/accounts" || pathname === "/accounts/test" || pathname === "/keys" || accountDelete || keyRevoke) {
+  if (
+    pathname === "/logout" ||
+    pathname === "/accounts" ||
+    pathname === "/accounts/test" ||
+    pathname === "/keys" ||
+    accountDelete ||
+    ACCOUNT_SENDING.test(pathname) ||
+    keyRevoke
+  ) {
     return "POST";
   }
   if (pathname === "/signup" || pathname === "/login") return "GET, POST";
@@ -342,6 +363,7 @@ async function submitAccount(
   }
   const parsed = parseAccountForm(fields);
   delete fields.password;
+  delete fields.smtp_password;
   const notice = noticeFor(url);
   if (!parsed.account || parsed.errors.length > 0) {
     writeDashboard(res, handler, session, { draft: parsed.draft, errors: parsed.errors, notice }, 400);
@@ -419,7 +441,7 @@ async function submitKey(req: IncomingMessage, res: ServerResponse, url: URL, ha
   }
   let created: { name: string; token: string; prefix: string };
   try {
-    created = apiKeys.create(handler.db, { userId: session.userId, name: parsed.name });
+    created = apiKeys.create(handler.db, { userId: session.userId, name: parsed.name, canSend: parsed.canSend === true });
   } catch (err) {
     const message = safeMailMessage(err);
     if (!message) throw err;
@@ -504,6 +526,7 @@ function writeDashboard(
       accounts: mailAccounts.list(handler.db, session.userId),
       keys: apiKeys.list(handler.db, session.userId),
       grants: listGrants(handler.db, session.userId),
+      sends: listSendLog(handler.db, session.userId),
       mcpUrl: mcpUrl(handler.publicUrl),
       draft: input.draft,
       ...(input.errors && input.errors.length > 0 ? { errors: input.errors } : {}),
@@ -548,6 +571,18 @@ async function imapProbe(handler: Handler, account: ParsedAccount): Promise<stri
     imap: endpoints.imap,
     smtp: endpoints.smtp,
     allowInsecureLocalhost: handler.allowInsecureLocalhost,
+    sendEnabled: false,
+    smtpAuth: {
+      user: account.smtpUsername?.trim() || account.username,
+      pass: account.smtpPassword || account.password,
+    },
+    autoSavesSent: endpoints.autoSavesSent,
+    ...(handler.insecureImapHosts && handler.insecureImapHosts.length > 0
+      ? { insecureImapHosts: handler.insecureImapHosts }
+      : {}),
+    ...(handler.insecureSmtpHosts && handler.insecureSmtpHosts.length > 0
+      ? { insecureSmtpHosts: handler.insecureSmtpHosts }
+      : {}),
   };
   try {
     await handler.imap.withClient(credentials, async () => undefined);
@@ -576,7 +611,53 @@ function accountInput(userId: string, account: ParsedAccount) {
     ...(account.smtpPort !== undefined ? { smtpPort: account.smtpPort } : {}),
     ...(account.smtpSecure !== undefined ? { smtpSecure: account.smtpSecure } : {}),
     ...(account.smtpStarttls !== undefined ? { smtpStarttls: account.smtpStarttls } : {}),
+    ...(account.smtpUsername ? { smtpUsername: account.smtpUsername } : {}),
+    ...(account.smtpPassword ? { smtpPassword: account.smtpPassword } : {}),
   };
+}
+
+async function submitSending(req: IncomingMessage, res: ServerResponse, handler: Handler, accountId: string): Promise<void> {
+  const session = currentSession(req, handler);
+  if (!session) {
+    req.resume();
+    redirect(res, "/login");
+    return;
+  }
+  const fields = await readForm(req, res, handler.bodyLimit);
+  if (!fields) return;
+  if (!csrfOk(session, fields)) {
+    forbidden(res);
+    return;
+  }
+  const enable = fields.enabled === "1";
+  if (!enable) {
+    mailAccounts.setSendEnabled(handler.db, session.userId, accountId, false);
+    redirect(res, "/dashboard?notice=sending-off");
+    return;
+  }
+  const store = new SqliteCredentialStore(handler.db, handler.masterKey, {
+    allowInsecureLocalhost: handler.allowInsecureLocalhost,
+    ...(handler.insecureImapHosts ? { insecureImapHosts: handler.insecureImapHosts } : {}),
+    ...(handler.insecureSmtpHosts ? { insecureSmtpHosts: handler.insecureSmtpHosts } : {}),
+  });
+  const account = await store.getAccount(session.userId, accountId);
+  if (!account) {
+    writeDashboard(res, handler, session, { draft: emptyAccountDraft(), errors: ["That mailbox was not found."] }, 404);
+    return;
+  }
+  try {
+    await handler.smtp.verify(account);
+  } catch (err) {
+    const mail = err instanceof MailError ? err : toMailError(err, account.password);
+    const message = scrubSecret(scrubSecret(mail.message, account.password), account.smtpAuth.pass);
+    writeDashboard(res, handler, session, {
+      draft: emptyAccountDraft(),
+      errors: [message || "Could not sign in to the SMTP server."],
+    }, 400);
+    return;
+  }
+  mailAccounts.setSendEnabled(handler.db, session.userId, accountId, true);
+  redirect(res, "/dashboard?notice=sending-on");
 }
 
 function currentSession(req: IncomingMessage, handler: Handler): SessionRecord | null {

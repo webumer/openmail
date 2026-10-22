@@ -32,7 +32,9 @@ import {
   type CredentialStore,
 } from "./store/index.js";
 import { createWebHandler, resolveSecureCookies } from "./web/index.js";
-import { parseInsecureImapHosts } from "./mail/tls.js";
+import { createSmtpGateway } from "./mail/smtp-gateway.js";
+import { parseInsecureImapHosts, parseInsecureSmtpHosts } from "./mail/tls.js";
+import { createMemorySendRecorder, createSqliteSendRecorder, pruneSendLog } from "./services/send-log.js";
 import { demoConfigFromEnv, reseedIntervalFromEnv, startDemoSeeder } from "./demo/seed.js";
 import { bearerChallenge, createDocumentFetcher, createOAuthHandler, deriveOAuthConfig } from "./oauth/index.js";
 
@@ -92,7 +94,10 @@ async function listenSingle(config: AppConfig): Promise<void> {
   const server = createOpenMailServer({
     store: new ConfigCredentialStore(config),
     imap: createImapGateway(),
+    smtp: createSmtpGateway(),
+    sends: createMemorySendRecorder(),
     apiKeyHashes,
+    ...(publicUrl ? { publicUrl } : {}),
     security: {
       ...(publicUrl ? { publicUrl } : {}),
       trustProxy,
@@ -109,16 +114,22 @@ async function listenMulti(config: AppConfig | undefined): Promise<void> {
   const allowInsecureLocalhost =
     process.env.OPENMAIL_ALLOW_INSECURE_LOCALHOST === "1" || config?.allowInsecureLocalhost === true;
   const insecureImapHosts = parseInsecureImapHosts(process.env.OPENMAIL_INSECURE_IMAP_HOSTS);
+  const insecureSmtpHosts = parseInsecureSmtpHosts(process.env.OPENMAIL_INSECURE_SMTP_HOSTS);
+  pruneSendLog(db);
   const demo = demoConfigFromEnv(process.env, insecureImapHosts);
   if (demo) startDemoSeeder(demo, reseedIntervalFromEnv(process.env));
   const publicUrl = process.env.OPENMAIL_PUBLIC_URL?.trim() || undefined;
   const trustProxy = process.env.OPENMAIL_TRUST_PROXY === "1";
   const secureCookies = resolveSecureCookies(process.env);
   const imap = createImapGateway();
+  const smtp = createSmtpGateway();
   const web = createWebHandler({
     db,
     masterKey,
     imap,
+    smtp,
+    insecureImapHosts,
+    insecureSmtpHosts,
     ...(publicUrl ? { publicUrl } : {}),
     trustProxy,
     allowInsecureLocalhost,
@@ -138,8 +149,11 @@ async function listenMulti(config: AppConfig | undefined): Promise<void> {
       })
     : undefined;
   const server = createOpenMailServer({
-    store: new SqliteCredentialStore(db, masterKey, { allowInsecureLocalhost, insecureImapHosts }),
+    store: new SqliteCredentialStore(db, masterKey, { allowInsecureLocalhost, insecureImapHosts, insecureSmtpHosts }),
     imap,
+    smtp,
+    sends: createSqliteSendRecorder(db),
+    ...(publicUrl ? { publicUrl } : {}),
     authenticate: (header) => authenticateDatabaseKey(db, header, oauthConfig?.resource),
     web: oauth ? async (req, res) => (await oauth(req, res)) || (await web(req, res)) : web,
     ...(oauthConfig ? { challenge: (invalid: boolean) => bearerChallenge(oauthConfig, invalid) } : {}),

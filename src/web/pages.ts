@@ -1,4 +1,5 @@
 import type { ApiKeySummary, MailAccountSummary } from "../services/index.js";
+import type { SendLogRow } from "../services/send-log.js";
 import type { GrantSummary } from "../oauth/grants.js";
 import { PROVIDER_PRESETS, ZOHO_REGIONS } from "../mail/presets.js";
 import type { AccountDraft } from "./forms.js";
@@ -8,7 +9,7 @@ export const SUPPORT_EMAIL = "support@openmail.tools";
 export const SITE_URL = "https://mcp.openmail.tools";
 export const MCP_ENDPOINT = `${SITE_URL}/mcp`;
 const DEFAULT_DESCRIPTION =
-  "Connect any IMAP email inbox to your AI assistant. Read-only, works with any provider, and no email content is stored.";
+  "Connect any email inbox to your AI assistant. Read-only by default. Sending is opt-in per mailbox, and your assistant asks you before every email.";
 
 export interface LayoutOptions {
   csrf?: string;
@@ -112,9 +113,10 @@ export function homePage(input: { email: string | null; csrf?: string; notice?: 
     ["search_messages", "Search by sender, recipient, subject, text, date, unread or attachments. Newest first, paged."],
     ["read_message", "Headers, plain-text body and attachment names and sizes. Does not mark the message as read."],
     ["read_thread", "The whole conversation, oldest first."],
+    ["send_message", "Sends one email after you have seen it and said to send it. Off unless you turn sending on for that mailbox."],
   ];
   const security: Array<[Parameters<typeof icon>[0], string, string]> = [
-    ["eye", "Read-only", "Agents can list, search and read. They cannot send, delete, move or flag mail."],
+    ["eye", "Read-only by default", "Agents can list, search and read. Sending is off until you turn it on for a mailbox and allow it for that connection. They cannot delete, move or flag mail."],
     ["check", "Never marks mail as read", "Messages are opened read-only and fetched with BODY.PEEK, so unread stays unread."],
     ["server", "No email stored", "Messages are fetched from your provider on request and passed straight to your assistant."],
     ["lock", "Encrypted passwords", "Mailbox passwords are encrypted with AES-256-GCM using a key unique to your account."],
@@ -125,8 +127,8 @@ export function homePage(input: { email: string | null; csrf?: string; notice?: 
   ];
   const faq: Array<[string, string]> = [
     ["Is my mail stored?", "No. OpenMail fetches messages from your provider when your assistant asks and does not keep them. It stores only your account details, encrypted mailbox passwords, and hashed API keys and sign-in tokens. See the <a href=\"/privacy\">privacy policy</a>."],
-    ["Can it send or delete email?", "No. Today OpenMail is read-only: no sending, deleting, moving or flagging. Sending is planned, as drafts that go out only after you approve them."],
-    ["Which providers work?", "Any mailbox with IMAP access. Migadu, Fastmail, Zoho and iCloud have presets; for anything else, enter your IMAP server with TLS on port 993 (or STARTTLS on 143). Use an app-specific password where your provider offers one."],
+    ["Can it send or delete email?", "It can send only from a mailbox where you turned sending on, and only after your assistant shows you the email and you confirm it. It cannot delete, move or flag mail, and reading never marks a message as read."],
+    ["Which providers work?", "Any mailbox with IMAP and SMTP. Migadu, Fastmail, Zoho, iCloud and Gmail have presets; for anything else, enter the servers yourself. Use an app-specific password where your provider offers one. Gmail needs an App Password."],
     ["Which assistants can I use?", "Any assistant that supports remote MCP servers. Clients that support MCP sign-in (OAuth), such as Claude custom connectors, Claude Code, ChatGPT and MCP Inspector, only need the URL: you log in to OpenMail and approve read-only access. Grok Bot and clients that send a fixed header use an API key from your dashboard."],
     ["How do I revoke access?", "Open your dashboard and disconnect the app under Connected apps, revoke the API key, or remove the mailbox. Each takes effect immediately."],
     ["Is it free?", "Yes, OpenMail is free while in beta."],
@@ -139,7 +141,7 @@ export function homePage(input: { email: string | null; csrf?: string; notice?: 
 <div class="hero-copy">
 <p class="eyebrow">Email for AI assistants</p>
 <h1>Connect any email inbox to your AI assistant</h1>
-<p class="lead">Works with any IMAP provider. Read-only, and nothing is stored: your assistant searches and reads your mail live, over a secure MCP connection.</p>
+<p class="lead">Read-only by default. Sending is opt-in per mailbox, and your assistant asks you before every email.</p>
 <div class="cta">${primary}<a class="btn btn-secondary btn-lg" href="#how">How it works</a></div>
 <ul class="hero-points" aria-label="Highlights"><li>${icon("check")}Any IMAP provider</li><li>${icon("check")}Read-only</li><li>${icon("check")}No email stored</li></ul>
 </div>
@@ -203,7 +205,7 @@ ${copyField("Header", "Authorization: Bearer <your key>", "copy-header")}
 
 <section id="tools" class="section section-tint"><div class="container">
 <h2 class="section-title">Tools</h2>
-<p class="section-lead">Five read-only MCP tools.</p>
+<p class="section-lead">Five read tools, plus send when you turn it on.</p>
 <div class="tools">${tools.map(([name, text]) => `<div class="card tool"><code>${name}</code><p>${text}</p></div>`).join("")}</div>
 </div></section>
 
@@ -274,12 +276,13 @@ export function privacyPage(options: { csrf?: string } = {}): string {
 <h2>How long we keep data</h2>
 <ul>
 <li>Email content: not kept. It is held in memory only while a request is answered.</li>
-<li>Account and mailbox settings: until you remove the mailbox or your account is deleted.</li>
+<li>Account and mailbox settings, including an optional separate SMTP password encrypted with its own key binding: until you remove the mailbox or your account is deleted.</li>
+<li>Send log: time, mailbox label, recipient count, status, message id and which connection sent it. No message body, subject or addresses. Kept for 90 days.</li>
 <li>Signed-in browser sessions: 7 days. OAuth access tokens: 1 hour. OAuth refresh tokens: 30 days. API keys: until you revoke them.</li>
 <li>Web server access logs (IP address, time, address requested, browser type and response status; never passwords, tokens or cookies): 14 days, then deleted automatically.</li>
 </ul>
 <h2>Security</h2>
-<p>All traffic uses HTTPS. Access is read-only: OpenMail cannot send, delete, move, or flag mail. Revoke an API key, disconnect an app or remove a mailbox from your dashboard at any time, and it stops working immediately.</p>
+<p>All traffic uses HTTPS. Reading never marks mail as read. Sending is off until you turn it on for a mailbox and allow it for that connection. OpenMail cannot delete, move or flag mail. Revoke an API key, disconnect an app, turn sending off or remove a mailbox from your dashboard at any time, and it stops working immediately.</p>
 <h2>Deleting your data</h2>
 <p>Removing a mailbox in your dashboard immediately deletes its stored settings and encrypted password. To delete your whole account, email <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a> from your login address. We delete it within 30 days, usually much sooner. Deletion removes your login, sessions, API keys, connected apps and every mailbox with its encrypted password from the database at once. OpenMail keeps no other copies.</p>
 <h2>Requests from authorities</h2>
@@ -304,7 +307,7 @@ export function supportPage(options: { csrf?: string } = {}): string {
 <h3>My mailbox won't connect</h3>
 <p>Most providers need IMAP turned on and an <strong>app password</strong> instead of your normal password, especially when two-step sign-in is on. The server must be reachable on the internet over TLS, usually port 993. Use <em>Test connection</em> before saving. OpenMail shows a short reason when sign-in fails.</p>
 <h3>Will my assistant mark emails as read, or send or delete anything?</h3>
-<p>No. OpenMail is read-only. Mailboxes are opened read-only and messages are fetched without setting the read flag, so they stay unread in your mail app. There are no send, delete, move or flag tools.</p>
+<p>Reading never marks mail as read. Sending happens only for a mailbox where you turned it on, through a connection allowed to send, and only when you confirm that message. There are no delete, move or flag tools.</p>
 <h3>Does OpenMail store my email?</h3>
 <p>No. Messages are fetched from your provider when you ask and passed straight to your assistant. See the <a href="/privacy">privacy policy</a> for exactly what is stored and for how long.</p>
 <h3>How do I disconnect an assistant?</h3>
@@ -312,7 +315,7 @@ export function supportPage(options: { csrf?: string } = {}): string {
 <h3>How do I delete my account?</h3>
 <p>Email ${SUPPORT_EMAIL} from your login address. We delete the account within 30 days, usually much sooner. You can remove any mailbox yourself at any time.</p>
 <h3>Which tools are available?</h3>
-<p>list_accounts, list_folders, search_messages, read_message and read_thread. Inputs, outputs, errors and limits are documented in <a href="https://github.com/webumer/openmail/blob/main/docs/tools.md" rel="noopener">docs/tools.md</a>.</p>
+<p>list_accounts, list_folders, search_messages, read_message, read_thread and send_message. Inputs, outputs, errors and limits are documented in <a href="https://github.com/webumer/openmail/blob/main/docs/tools.md" rel="noopener">docs/tools.md</a>.</p>
 </article>`,
     { ...options, path: "/support", description: "Get help with OpenMail: contact, GitHub issues and frequently asked questions." },
   );
@@ -333,12 +336,13 @@ export function termsPage(options: { csrf?: string } = {}): string {
 <p class="muted">Last updated October 2026</p>
 <p>By creating an OpenMail account or using an OpenMail API key you agree to these terms.</p>
 <h2>The service</h2>
-<p>OpenMail gives AI agents read-only access to mailboxes you connect, over the Model Context Protocol. It is provided "as is", without warranties of any kind, and may change or be unavailable at times.</p>
+<p>OpenMail gives AI agents access to mailboxes you connect, over the Model Context Protocol. Sending is off unless you turn it on. It is provided "as is", without warranties of any kind, and may change or be unavailable at times.</p>
 <h2>Your responsibilities</h2>
 <ul>
 <li>Only connect mailboxes you own or are authorised to access.</li>
 <li>Keep your login password and API keys secret. Anyone holding one of your API keys can read the mailboxes on your account.</li>
 <li>Do not use OpenMail to break the law, to break your mail provider's terms, to probe or attack other systems, or to overload the service.</li>
+<li>You are responsible for mail you approve. Do not send spam. Sending is rate limited.</li>
 <li>You are responsible for what your agent does with the email it reads. Email content is untrusted data and should never be treated as instructions.</li>
 </ul>
 <h2>Limits</h2>
@@ -402,6 +406,7 @@ export function dashboardPage(input: {
   accounts: MailAccountSummary[];
   keys: ApiKeySummary[];
   grants?: GrantSummary[];
+  sends?: SendLogRow[];
   mcpUrl: string | null;
   draft: AccountDraft;
   errors?: string[];
@@ -421,6 +426,7 @@ ${alerts}
 <div class="card">${grantList(input.grants ?? [], input.csrf)}</div>
 <div class="card">${oauthSection(input.mcpUrl)}</div>
 <div class="card">${keyList(input.keys, input.csrf)}${keyForm(input.csrf)}</div>
+<div class="card">${sendLogSection(input.sends ?? [])}</div>
 <div class="card">${grokSection(input.mcpUrl)}</div>
 </div>`,
     { csrf: input.csrf, script: true, path: "/dashboard" },
@@ -466,11 +472,39 @@ function accountList(accounts: MailAccountSummary[], csrf: string): string {
 <p><span class="muted">Email</span> ${escapeHtml(account.email)}</p>
 <p><span class="muted">Preset</span> ${escapeHtml(account.preset)}</p>
 <p><span class="muted">Host</span> ${escapeHtml(account.imapHost)}</p>
+<p><span class="muted">SMTP</span> ${escapeHtml(account.smtpHost)}:${account.smtpPort} · ${escapeHtml(smtpSecurityLabel(account))}</p>
+<p><span class="muted">Sending</span> ${account.sendEnabled ? "On" : "Off"}</p>
+<form method="post" action="/accounts/${escapeHtml(account.id)}/sending"><input type="hidden" name="_csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="enabled" value="${account.sendEnabled ? "0" : "1"}"><button class="secondary" type="submit">${account.sendEnabled ? "Turn off sending" : "Allow sending"}</button></form>
 <form method="post" action="/accounts/${escapeHtml(account.id)}/delete"><input type="hidden" name="_csrf" value="${escapeHtml(csrf)}"><button class="secondary" type="submit">Remove</button></form>
 </li>`,
     )
     .join("");
   return `<section id="account-list"><h2>Mail accounts</h2><ul class="records">${items}</ul></section>`;
+}
+
+function smtpSecurityLabel(account: MailAccountSummary): string {
+  if (account.smtpPort === 465 || account.smtpSecure) return "SSL/TLS";
+  if (account.smtpPort === 587 || account.smtpPort === 2525 || account.smtpStarttls) return "STARTTLS";
+  return "plain";
+}
+
+function sendLogSection(rows: SendLogRow[]): string {
+  if (rows.length === 0) {
+    return `<section id="send-log"><h2>Sent by your assistants</h2><p>Nothing has been sent yet.</p></section>`;
+  }
+  const items = rows
+    .map(
+      (row) => `<li>
+<p><span class="muted">Time (UTC)</span> ${escapeHtml(row.createdAt)}</p>
+<p><span class="muted">Mailbox</span> ${escapeHtml(row.accountLabel)}</p>
+<p><span class="muted">Recipients</span> ${row.recipients}</p>
+<p><span class="muted">Status</span> ${escapeHtml(row.status)}</p>
+<p><span class="muted">Message id</span> ${escapeHtml(row.messageId ?? "—")}</p>
+<p><span class="muted">Via</span> ${escapeHtml(row.via)}</p>
+</li>`,
+    )
+    .join("");
+  return `<section id="send-log"><h2>Sent by your assistants</h2><ul class="records">${items}</ul></section>`;
 }
 
 function accountForm(draft: AccountDraft, csrf: string): string {
@@ -493,8 +527,9 @@ function accountForm(draft: AccountDraft, csrf: string): string {
 <label>SMTP port <input id="smtp_port" name="smtp_port" inputmode="numeric" value="${escapeHtml(draft.smtpPort)}"${locked}></label>
 </div>
 <label class="check"><input id="imap_secure" name="imap_secure" type="checkbox" value="on"${draft.imapSecure ? " checked" : ""}${checksDisabled}> IMAP TLS</label>
-<label class="check"><input id="smtp_secure" name="smtp_secure" type="checkbox" value="on"${draft.smtpSecure ? " checked" : ""}${checksDisabled}> SMTP implicit TLS</label>
-<label class="check"><input id="smtp_starttls" name="smtp_starttls" type="checkbox" value="on"${draft.smtpStarttls ? " checked" : ""}${checksDisabled}> SMTP STARTTLS</label>
+<label>SMTP security <select id="smtp_security" name="smtp_security"${checksDisabled}>${option("tls", "SSL/TLS (465)", draft.smtpSecure && !draft.smtpStarttls)}${option("starttls", "STARTTLS (587)", draft.smtpStarttls)}</select></label>
+<label>SMTP username <input id="smtp_username" name="smtp_username" maxlength="200" value="${escapeHtml(draft.smtpUsername)}" placeholder="Leave blank to use the IMAP login" autocomplete="off"></label>
+<label>SMTP password <input id="smtp_password" name="smtp_password" type="password" maxlength="1000" autocomplete="off" placeholder="Only if the SMTP login is different"></label>
 <div class="row"><button type="submit">Save</button><button class="secondary" type="submit" formaction="/accounts/test">Test connection</button></div>
 </form>
 </section>`;
@@ -513,6 +548,7 @@ function keyList(keys: ApiKeySummary[], csrf: string): string {
 <p><span class="muted">Prefix</span> <code>${escapeHtml(key.prefix)}</code></p>
 <p><span class="muted">Created</span> ${escapeHtml(key.createdAt)}</p>
 <p><span class="muted">Last used</span> ${escapeHtml(key.lastUsedAt ?? "Never")}</p>
+<p><span class="muted">Permission</span> ${key.canSend ? "Read and send" : "Read only"}</p>
 <p><span class="muted">Status</span> ${status}</p>
 ${revoke}
 </li>`;
@@ -526,6 +562,11 @@ function keyForm(csrf: string): string {
 <form class="stack" method="post" action="/keys">
 <input type="hidden" name="_csrf" value="${escapeHtml(csrf)}">
 <label>Name <input id="key-name" name="name" maxlength="200" required></label>
+<fieldset>
+<legend>Permission</legend>
+<label class="check"><input name="permission" type="radio" value="read" checked> Read only</label>
+<label class="check"><input name="permission" type="radio" value="send"> Read and send</label>
+</fieldset>
 <button type="submit">Create key</button>
 </form>
 </section>`;
@@ -534,7 +575,7 @@ function keyForm(csrf: string): string {
 function grokSection(mcpUrl: string | null): string {
   const url = mcpUrl ?? "Set OPENMAIL_PUBLIC_URL";
   return `<section id="grok"><h2>Connect to Grok Bot</h2>
-<p>Create an API key above, then add OpenMail to Grok Bot as a custom MCP connector (streamable HTTP) with this URL and header. Tools: list_accounts, list_folders, search_messages, read_message, read_thread.</p>
+<p>Create an API key above, then add OpenMail to Grok Bot as a custom MCP connector (streamable HTTP) with this URL and header. A read-only key cannot send. Tools: list_accounts, list_folders, search_messages, read_message, read_thread, send_message.</p>
 ${copyField("MCP URL", url, "dash-url")}
 ${copyField("Header", "Authorization: Bearer <your key>", "dash-header")}
 </section>`;
@@ -554,7 +595,7 @@ function grantList(grants: GrantSummary[], csrf: string): string {
 <p><span class="muted">App</span> ${escapeHtml(grant.clientName)}</p>
 ${verified}
 <p><span class="muted">Returns to</span> ${escapeHtml(grant.redirectHost)}</p>
-<p><span class="muted">Access</span> read-only (${escapeHtml(grant.scope)})</p>
+<p><span class="muted">Access</span> ${grant.scope.split(" ").includes("mail.send") ? "Read and send" : "Read only"}</p>
 <p><span class="muted">Connected</span> ${escapeHtml(grant.createdAt)}</p>
 <p><span class="muted">Last used</span> ${escapeHtml(grant.lastUsedAt ?? "Never")}</p>
 <form method="post" action="/apps/${escapeHtml(grant.id)}/revoke"><input type="hidden" name="_csrf" value="${escapeHtml(csrf)}"><button class="secondary" type="submit">Disconnect</button></form>
@@ -585,6 +626,7 @@ export interface ConsentView {
   loopback: boolean;
   accounts: MailAccountSummary[];
   params: Record<string, string>;
+  sendRequested?: boolean;
 }
 
 /** "<app> wants read-only access to your OpenMail mailboxes" with Allow / Deny. */
@@ -609,7 +651,7 @@ export function consentPage(view: ConsentView): string {
     "Allow access · OpenMail",
     `<div class="auth"><div class="card auth-card consent">
 <a class="auth-logo" href="/"><img src="/logo.svg" alt="OpenMail" width="56" height="56"></a>
-<h1><span class="consent-app">${escapeHtml(view.clientName)}</span> wants read-only access to your OpenMail mailboxes</h1>
+<h1><span class="consent-app">${escapeHtml(view.clientName)}</span> ${view.sendRequested ? "wants access" : "wants read-only access"} to your OpenMail mailboxes</h1>
 <p class="muted">Signed in as ${escapeHtml(view.email)}</p>
 ${identity}
 ${loopback}
@@ -618,9 +660,15 @@ ${loopback}
 <li>${icon("check")}<span>List your mailboxes and folders</span></li>
 <li>${icon("check")}<span>Search and read your messages and threads</span></li>
 </ul>
+${
+    view.sendRequested
+      ? `<h2>Send email as you</h2>
+<label class="check"><input name="allow_send" type="checkbox" value="on"> Also allow ${escapeHtml(view.clientName)} to send email from mailboxes where you turned on sending. Your assistant must show you each email and ask before sending.</label>`
+      : ""
+  }
 <h2>It will not be able to</h2>
 <ul class="consent-list">
-<li>${icon("lock")}<span>Send, delete, move or flag mail, or mark it as read</span></li>
+<li>${icon("lock")}<span>${view.sendRequested ? "Delete, move or flag mail, or mark it as read" : "Send, delete, move or flag mail, or mark it as read"}</span></li>
 <li>${icon("lock")}<span>See your mailbox passwords or your OpenMail password</span></li>
 </ul>
 <h2>Mailboxes it can read</h2>

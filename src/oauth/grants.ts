@@ -225,11 +225,11 @@ export function resolveAccessToken(
   token: string,
   resource: string,
   now = Date.now(),
-): { userId: string; grantId: string } | null {
+): { userId: string; grantId: string; scope: string; clientName: string } | null {
   if (!token.startsWith(ACCESS_TOKEN_PREFIX) || token.length > 200) return null;
   const row = db
     .prepare(
-      `SELECT t.expires_at, t.revoked_at, g.id AS grant_id, g.user_id, g.scope, g.resource, g.revoked_at AS grant_revoked, g.last_used_at
+      `SELECT t.expires_at, t.revoked_at, g.id AS grant_id, g.user_id, g.scope, g.resource, g.client_name, g.revoked_at AS grant_revoked, g.last_used_at
        FROM oauth_tokens t JOIN oauth_grants g ON g.id = t.grant_id
        WHERE t.token_hash = ? AND t.kind = 'access'`,
     )
@@ -240,6 +240,7 @@ export function resolveAccessToken(
         grant_id: string;
         user_id: string;
         scope: string;
+        client_name: string;
         resource: string;
         grant_revoked: string | null;
         last_used_at: string | null;
@@ -252,7 +253,7 @@ export function resolveAccessToken(
   if (!row.last_used_at || now - Date.parse(row.last_used_at) >= GRANT_TOUCH_INTERVAL_MS) {
     db.prepare("UPDATE oauth_grants SET last_used_at = ? WHERE id = ?").run(new Date(now).toISOString(), row.grant_id);
   }
-  return { userId: row.user_id, grantId: row.grant_id };
+  return { userId: row.user_id, grantId: row.grant_id, scope: row.scope, clientName: row.client_name };
 }
 
 /**

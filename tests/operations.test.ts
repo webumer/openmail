@@ -25,6 +25,9 @@ function harness(session = new RecordingSession()) {
       modes.push(`mailbox:${folder}`);
       return fn(session);
     },
+    async appendMessage() {
+      return undefined;
+    },
   };
   const store: CredentialStore = {
     async listAccounts() {
@@ -34,6 +37,7 @@ function harness(session = new RecordingSession()) {
         email: account.email,
         preset: account.preset,
         imapHost: account.imap.host,
+        sendEnabled: false,
       }];
     },
     async getAccount(_userId, accountId) {
@@ -53,7 +57,7 @@ describe("read-only mail operations", () => {
     expect(result).toMatchObject({
       ok: true,
       truncated: false,
-      data: [{ id: "work", label: "Work", email: "you@example.com", preset: "migadu", imap_host: "imap.migadu.com" }],
+      data: [{ id: "work", label: "Work", email: "you@example.com", preset: "migadu", imap_host: "imap.migadu.com", sending_enabled: false }],
     });
     expect(JSON.stringify(result)).not.toContain(SECRET);
     expect(await listAccounts(store, "  ")).toMatchObject({ ok: false, error: { code: "invalid_argument" } });

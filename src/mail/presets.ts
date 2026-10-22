@@ -1,6 +1,6 @@
 import { MailError } from "../errors.js";
 
-export const PROVIDER_PRESETS = ["migadu", "fastmail", "zoho", "icloud", "custom"] as const;
+export const PROVIDER_PRESETS = ["migadu", "fastmail", "zoho", "icloud", "gmail", "custom"] as const;
 export type ProviderPreset = (typeof PROVIDER_PRESETS)[number];
 
 export const ZOHO_REGIONS = ["com", "eu", "in"] as const;
@@ -22,6 +22,13 @@ export interface SmtpEndpoint {
   starttls: boolean;
 }
 
+export interface ResolvedEndpoints {
+  imap: ImapEndpoint;
+  smtp: SmtpEndpoint;
+  /** The provider stores a Sent copy itself, so OpenMail does not APPEND one. */
+  autoSavesSent: boolean;
+}
+
 export interface EndpointInput {
   preset: ProviderPreset;
   zohoRegion?: ZohoRegion;
@@ -36,36 +43,46 @@ export interface EndpointInput {
 
 const TLS = true;
 
-const FIXED: Record<Exclude<ProviderPreset, "custom" | "zoho">, { imap: ImapEndpoint; smtp: SmtpEndpoint }> = {
+const FIXED: Record<Exclude<ProviderPreset, "custom" | "zoho">, ResolvedEndpoints> = {
   migadu: {
     imap: { host: "imap.migadu.com", port: 993, secure: TLS },
     smtp: { host: "smtp.migadu.com", port: 465, secure: TLS, starttls: false },
+    autoSavesSent: false,
   },
   fastmail: {
     imap: { host: "imap.fastmail.com", port: 993, secure: TLS },
     smtp: { host: "smtp.fastmail.com", port: 465, secure: TLS, starttls: false },
+    autoSavesSent: false,
   },
   icloud: {
     imap: { host: "imap.mail.me.com", port: 993, secure: TLS },
     smtp: { host: "smtp.mail.me.com", port: 587, secure: false, starttls: true },
+    autoSavesSent: false,
+  },
+  gmail: {
+    imap: { host: "imap.gmail.com", port: 993, secure: TLS },
+    smtp: { host: "smtp.gmail.com", port: 465, secure: TLS, starttls: false },
+    autoSavesSent: true,
   },
 };
 
-export function zohoEndpoints(region: ZohoRegion = "com"): { imap: ImapEndpoint; smtp: SmtpEndpoint } {
+export function zohoEndpoints(region: ZohoRegion = "com"): ResolvedEndpoints {
   if (!ZOHO_REGIONS.includes(region)) {
     throw new MailError("config_error", `Unknown Zoho region "${region}"`);
   }
   return {
     imap: { host: `imap.zoho.${region}`, port: 993, secure: TLS },
     smtp: { host: `smtp.zoho.${region}`, port: 465, secure: TLS, starttls: false },
+    autoSavesSent: false,
   };
 }
 
-export function resolveEndpoints(input: EndpointInput): { imap: ImapEndpoint; smtp: SmtpEndpoint } {
+export function resolveEndpoints(input: EndpointInput): ResolvedEndpoints {
   switch (input.preset) {
     case "migadu":
     case "fastmail":
     case "icloud":
+    case "gmail":
       return FIXED[input.preset];
     case "zoho":
       return zohoEndpoints(input.zohoRegion ?? "com");
@@ -78,7 +95,7 @@ export function resolveEndpoints(input: EndpointInput): { imap: ImapEndpoint; sm
   }
 }
 
-function customEndpoints(input: EndpointInput): { imap: ImapEndpoint; smtp: SmtpEndpoint } {
+function customEndpoints(input: EndpointInput): ResolvedEndpoints {
   if (!input.imapHost || input.imapPort === undefined || !input.smtpHost || input.smtpPort === undefined) {
     throw new MailError("config_error", "Custom preset requires imap_host, imap_port, smtp_host, and smtp_port");
   }
@@ -94,5 +111,6 @@ function customEndpoints(input: EndpointInput): { imap: ImapEndpoint; smtp: Smtp
       secure: input.smtpSecure ?? true,
       starttls: input.smtpStarttls ?? false,
     },
+    autoSavesSent: false,
   };
 }

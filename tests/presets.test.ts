@@ -7,6 +7,7 @@ describe("provider presets", () => {
     expect(resolveEndpoints({ preset: "migadu" })).toEqual({
       imap: { host: "imap.migadu.com", port: 993, secure: true },
       smtp: { host: "smtp.migadu.com", port: 465, secure: true, starttls: false },
+      autoSavesSent: false,
     });
     expect(resolveEndpoints({ preset: "fastmail" }).imap.host).toBe("imap.fastmail.com");
     expect(resolveEndpoints({ preset: "fastmail" }).smtp).toMatchObject({ host: "smtp.fastmail.com", port: 465, secure: true });
@@ -17,6 +18,7 @@ describe("provider presets", () => {
     expect(resolveEndpoints({ preset: "zoho", zohoRegion: "eu" })).toEqual({
       imap: { host: "imap.zoho.eu", port: 993, secure: true },
       smtp: { host: "smtp.zoho.eu", port: 465, secure: true, starttls: false },
+      autoSavesSent: false,
     });
     expect(resolveEndpoints({ preset: "zoho", zohoRegion: "in" }).imap.host).toBe("imap.zoho.in");
     expect(resolveEndpoints({ preset: "zoho", zohoRegion: "in" }).smtp.host).toBe("smtp.zoho.in");
@@ -26,6 +28,15 @@ describe("provider presets", () => {
     expect(resolveEndpoints({ preset: "icloud" })).toEqual({
       imap: { host: "imap.mail.me.com", port: 993, secure: true },
       smtp: { host: "smtp.mail.me.com", port: 587, secure: false, starttls: true },
+      autoSavesSent: false,
+    });
+  });
+
+  it("resolves Gmail and records that Gmail saves Sent itself", () => {
+    expect(resolveEndpoints({ preset: "gmail" })).toEqual({
+      imap: { host: "imap.gmail.com", port: 993, secure: true },
+      smtp: { host: "smtp.gmail.com", port: 465, secure: true, starttls: false },
+      autoSavesSent: true,
     });
   });
 
@@ -39,6 +50,7 @@ describe("provider presets", () => {
     })).toEqual({
       imap: { host: "imap.example.com", port: 993, secure: true },
       smtp: { host: "smtp.example.com", port: 465, secure: true, starttls: false },
+      autoSavesSent: false,
     });
     expect(() => resolveEndpoints({ preset: "custom" })).toThrow(MailError);
     expect(() => resolveEndpoints({ preset: "nope" as ProviderPreset })).toThrow(/Unknown provider preset/);

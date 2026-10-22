@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import { sealPassword, unwrapDataKey } from "../crypto/envelope.js";
+import { sealPassword, sealSmtpPassword, unwrapDataKey } from "../crypto/envelope.js";
 import { isUniqueConstraint } from "../db/constraint.js";
 import { MailError } from "../errors.js";
 import { resolveEndpoints, type ProviderPreset } from "../mail/presets.js";
@@ -31,6 +31,9 @@ export interface NewMailAccount {
   smtpPort?: number;
   smtpSecure?: boolean;
   smtpStarttls?: boolean;
+  /** Optional login used only for SMTP. Blank means the IMAP username and password. */
+  smtpUsername?: string;
+  smtpPassword?: string;
 }
 
 export interface MailAccountSummary {
@@ -39,6 +42,11 @@ export interface MailAccountSummary {
   email: string;
   preset: ProviderPreset;
   imapHost: string;
+  sendEnabled: boolean;
+  smtpHost: string;
+  smtpPort: number;
+  smtpSecure: boolean;
+  smtpStarttls: boolean;
 }
 
 export function add(db: Database, masterKey: Buffer, input: NewMailAccount): MailAccountSummary {
@@ -59,6 +67,7 @@ export function add(db: Database, masterKey: Buffer, input: NewMailAccount): Mai
     smtpStarttls: input.smtpStarttls,
   });
   const username = input.username?.trim() ? input.username.trim() : email;
+  const smtpLogin = separateSmtpLogin(input.smtpUsername, input.smtpPassword);
   const user = db.prepare("SELECT wrapped_data_key FROM users WHERE id = ?").get(userId) as
     | { wrapped_data_key: Buffer }
     | undefined;
@@ -72,14 +81,16 @@ export function add(db: Database, masterKey: Buffer, input: NewMailAccount): Mai
   const dataKey = unwrapDataKey(masterKey, userId, asBuffer(user.wrapped_data_key));
   try {
     const sealed = sealPassword(dataKey, id, password);
+    const smtpSealed = smtpLogin ? sealSmtpPassword(dataKey, id, smtpLogin.password) : null;
     try {
       db.prepare(
         `INSERT INTO mail_accounts (
            id, user_id, name, email, username, preset,
            imap_host, imap_port, imap_secure,
            smtp_host, smtp_port, smtp_secure, smtp_starttls,
-           password_ciphertext, password_iv, password_tag, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           password_ciphertext, password_iv, password_tag, created_at,
+           send_enabled, smtp_username, smtp_password_ciphertext, smtp_password_iv, smtp_password_tag
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
       ).run(
         id,
         userId,
@@ -98,6 +109,10 @@ export function add(db: Database, masterKey: Buffer, input: NewMailAccount): Mai
         sealed.iv,
         sealed.tag,
         new Date().toISOString(),
+        smtpLogin?.username ?? null,
+        smtpSealed?.ciphertext ?? null,
+        smtpSealed?.iv ?? null,
+        smtpSealed?.tag ?? null,
       );
     } catch (err) {
       if (isUniqueConstraint(err)) {
@@ -108,13 +123,13 @@ export function add(db: Database, masterKey: Buffer, input: NewMailAccount): Mai
   } finally {
     dataKey.fill(0);
   }
-  return { id, name, email, preset, imapHost: endpoints.imap.host };
+  return summaryFrom(id, name, email, preset, endpoints.imap.host, endpoints.smtp, false);
 }
 
 export function list(db: Database, userId: string): MailAccountSummary[] {
   const rows = db
     .prepare(
-      `SELECT id, name, email, preset, imap_host
+      `SELECT id, name, email, preset, imap_host, send_enabled, smtp_host, smtp_port, smtp_secure, smtp_starttls
        FROM mail_accounts WHERE user_id = ? ORDER BY created_at, id`,
     )
     .all(requireId(userId, "userId")) as Array<{
@@ -123,14 +138,28 @@ export function list(db: Database, userId: string): MailAccountSummary[] {
     email: string;
     preset: string;
     imap_host: string;
+    send_enabled: number;
+    smtp_host: string;
+    smtp_port: number;
+    smtp_secure: number;
+    smtp_starttls: number;
   }>;
-  return rows.map((row) => ({
-    id: row.id,
-    name: row.name,
-    email: row.email,
-    preset: parsePreset(row.preset),
-    imapHost: row.imap_host,
-  }));
+  return rows.map((row) =>
+    summaryFrom(row.id, row.name, row.email, parsePreset(row.preset), row.imap_host, {
+      host: row.smtp_host,
+      port: row.smtp_port,
+      secure: row.smtp_secure === 1,
+      starttls: row.smtp_starttls === 1,
+    }, row.send_enabled === 1),
+  );
+}
+
+/** Turns sending on or off. The caller verifies SMTP before turning it on. */
+export function setSendEnabled(db: Database, userId: string, accountId: string, enabled: boolean): boolean {
+  const result = db
+    .prepare("UPDATE mail_accounts SET send_enabled = ? WHERE user_id = ? AND id = ?")
+    .run(enabled ? 1 : 0, requireId(userId, "userId"), requireId(accountId, "accountId"));
+  return result.changes === 1;
 }
 
 export function remove(db: Database, userId: string, accountId: string): boolean {
@@ -138,6 +167,44 @@ export function remove(db: Database, userId: string, accountId: string): boolean
     .prepare("DELETE FROM mail_accounts WHERE user_id = ? AND id = ?")
     .run(requireId(userId, "userId"), requireId(accountId, "accountId"));
   return result.changes === 1;
+}
+
+function separateSmtpLogin(
+  username: string | undefined,
+  password: string | undefined,
+): { username: string; password: string } | null {
+  const user = username?.trim() ?? "";
+  const pass = password ?? "";
+  if (!user && !pass) return null;
+  if (!user || !pass) {
+    throw new MailError("invalid_argument", "Enter both the SMTP username and password, or leave both blank");
+  }
+  if (user.length > 200) throw new MailError("invalid_argument", "SMTP username must be at most 200 characters");
+  if (pass.length > 1000) throw new MailError("invalid_argument", "SMTP password must be at most 1000 characters");
+  return { username: user, password: pass };
+}
+
+function summaryFrom(
+  id: string,
+  name: string,
+  email: string,
+  preset: ProviderPreset,
+  imapHost: string,
+  smtp: { host: string; port: number; secure: boolean; starttls: boolean },
+  sendEnabled: boolean,
+): MailAccountSummary {
+  return {
+    id,
+    name,
+    email,
+    preset,
+    imapHost,
+    sendEnabled,
+    smtpHost: smtp.host,
+    smtpPort: smtp.port,
+    smtpSecure: smtp.secure,
+    smtpStarttls: smtp.starttls,
+  };
 }
 
 function asBuffer(value: unknown): Buffer {

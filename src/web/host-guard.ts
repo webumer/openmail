@@ -9,7 +9,7 @@ export { isPrivateAddress, type Resolver };
  * Presets point at fixed public provider hosts and skip this check.
  */
 export const ALLOWED_IMAP_PORTS: readonly number[] = [143, 993];
-export const ALLOWED_SMTP_PORTS: readonly number[] = [25, 465, 587, 2525];
+export const ALLOWED_SMTP_PORTS: readonly number[] = [465, 587, 2525];
 
 const LOOPBACK_NAMES = new Set(["localhost", "127.0.0.1", "::1"]);
 

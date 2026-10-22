@@ -19,7 +19,8 @@ port = 8080
 id = "work"
 label = "Work"
 email = "you@example.com"
-preset = "migadu" # migadu | fastmail | zoho | icloud | custom
+preset = "migadu" # migadu | fastmail | zoho | icloud | gmail | custom
+# allow_sending = false # single-user mode only; default off. Also set OPENMAIL_SINGLE_USER_CAN_SEND=1
 # Name of an environment variable that holds the password. The value stays in
 # the environment and is never written here.
 password_env = "OPENMAIL_ACCT_WORK_PASSWORD"

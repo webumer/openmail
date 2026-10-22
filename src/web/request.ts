@@ -104,6 +104,11 @@ const KNOWN_FIELDS = new Set([
   "smtp_port",
   "smtp_secure",
   "smtp_starttls",
+  "smtp_security",
+  "smtp_username",
+  "smtp_password",
+  "permission",
+  "enabled",
 ]);
 
 export function formFields(body: Buffer): Record<string, string> {

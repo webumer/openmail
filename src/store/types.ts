@@ -6,6 +6,8 @@ export interface AccountSummary {
   email: string;
   preset: ProviderPreset;
   imapHost: string;
+  /** User turned on sending for this mailbox. Still requires a connection that may send. */
+  sendEnabled: boolean;
 }
 
 /** Connection settings plus the mailbox secret. Never log `password`. */
@@ -19,12 +21,20 @@ export interface AccountCredentials {
   imap: ImapEndpoint;
   smtp: SmtpEndpoint;
   allowInsecureLocalhost: boolean;
+  /** User turned on sending for this mailbox. */
+  sendEnabled: boolean;
+  /** Separate SMTP login, or the IMAP username and password when none was stored. */
+  smtpAuth: { user: string; pass: string };
+  /** Gmail stores Sent itself. OpenMail skips the Sent APPEND. */
+  autoSavesSent: boolean;
   /**
    * Exact hostnames an operator has allowed to use plain IMAP, such as an
    * internal demo server on a private Docker network. Never set for
    * user-entered hosts (the web probe leaves it empty).
    */
   insecureImapHosts?: readonly string[];
+  /** Exact hostnames allowed to use plain SMTP. Production lists `demo-mail` only. */
+  insecureSmtpHosts?: readonly string[];
 }
 
 /**

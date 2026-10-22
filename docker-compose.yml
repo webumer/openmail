@@ -24,6 +24,7 @@ services:
       OPENMAIL_TRUST_PROXY: "1"
       # Plain IMAP is allowed only for this exact internal host.
       OPENMAIL_INSECURE_IMAP_HOSTS: demo-mail
+      OPENMAIL_INSECURE_SMTP_HOSTS: demo-mail
       OPENMAIL_DEMO_IMAP_HOST: demo-mail
       OPENMAIL_DEMO_IMAP_PORT: "3143"
       OPENMAIL_DEMO_IMAP_USER: demo

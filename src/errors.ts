@@ -32,6 +32,34 @@ export function toMailError(err: unknown, secret?: string): MailError {
   return new MailError("imap_error", classifyImapFailure(message));
 }
 
+/** SMTP library failures become one of four short messages. Secrets are scrubbed first. */
+export function toSmtpError(err: unknown, secrets: readonly (string | undefined)[] = []): MailError {
+  if (err instanceof MailError) {
+    const message = scrubSecrets(err.message, secrets);
+    return message === err.message ? err : new MailError(err.code, message);
+  }
+  return new MailError("smtp_error", classifySmtpFailure(scrubSecrets(errorText(err), secrets)));
+}
+
+function scrubSecrets(message: string, secrets: readonly (string | undefined)[]): string {
+  let out = message;
+  for (const secret of secrets) out = scrubSecret(out, secret);
+  return out;
+}
+
+function classifySmtpFailure(message: string): string {
+  if (/certificate|UNABLE_TO_VERIFY|self[- ]signed|hostname\/ip does not match|unable to verify the first certificate/i.test(message)) {
+    return "TLS verification failed for the SMTP server";
+  }
+  if (/ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|ENOTFOUND|ETIMEDOUT|ESOCKETTIMEDOUT|getaddrinfo|timed out|Greeting never received/i.test(message)) {
+    return "Could not reach the SMTP server";
+  }
+  if (/EAUTH|Invalid login|authentication failed|535[ -]/i.test(message)) {
+    return "SMTP sign-in failed";
+  }
+  return "The SMTP server rejected the message";
+}
+
 function classifyImapFailure(message: string): string {
   if (/ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|ENOTFOUND|getaddrinfo/i.test(message)) {
     return "Could not reach the IMAP server";

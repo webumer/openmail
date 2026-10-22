@@ -20,6 +20,8 @@ const AccountSchema = z
     smtp_port: z.number().int().min(1).max(65535).optional(),
     smtp_secure: z.boolean().optional(),
     smtp_starttls: z.boolean().optional(),
+    /** Off unless the operator sets it. Sending also needs OPENMAIL_SINGLE_USER_CAN_SEND=1. */
+    allow_sending: z.boolean().optional(),
   })
   .strict()
   .superRefine((account, ctx) => {
@@ -109,6 +111,7 @@ export interface AccountConfig {
   smtpPort?: number;
   smtpSecure?: boolean;
   smtpStarttls?: boolean;
+  allowSending?: boolean;
 }
 
 export interface AppConfig {
@@ -142,6 +145,7 @@ export function parseConfig(input: unknown): AppConfig {
       ...(account.smtp_port !== undefined ? { smtpPort: account.smtp_port } : {}),
       ...(account.smtp_secure !== undefined ? { smtpSecure: account.smtp_secure } : {}),
       ...(account.smtp_starttls !== undefined ? { smtpStarttls: account.smtp_starttls } : {}),
+      ...(account.allow_sending === true ? { allowSending: true } : {}),
     })),
   };
 }

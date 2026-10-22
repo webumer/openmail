@@ -7,7 +7,9 @@ import { afterAll, describe, expect, it } from "vitest";
 import { parseConfig } from "../../src/config/index.js";
 import { UNTRUSTED_CONTENT_WARNING } from "../../src/mail/constants.js";
 import { createImapGateway } from "../../src/mail/index.js";
+import { createSmtpGateway } from "../../src/mail/smtp-gateway.js";
 import { createOpenMailServer, hashApiKeys } from "../../src/server/index.js";
+import { createMemorySendRecorder } from "../../src/services/send-log.js";
 import { ConfigCredentialStore } from "../../src/store/index.js";
 
 const KEY = "integration-test-key";
@@ -42,6 +44,7 @@ describe("MCP HTTP tools", () => {
         "read_message",
         "read_thread",
         "search_messages",
+        "send_message",
       ]);
       for (const tool of listed.tools) {
         expect(tool.description ?? "").toContain(UNTRUSTED_CONTENT_WARNING);
@@ -58,7 +61,11 @@ describe("MCP HTTP tools", () => {
         truncated: boolean;
         warnings: unknown[];
       };
-      expect(parsed).toMatchObject({ ok: true, truncated: false, warnings: [] });
+      expect(parsed).toMatchObject({
+        ok: true,
+        truncated: false,
+        warnings: ["This connection is read-only"],
+      });
       expect(parsed.data).toEqual([
         expect.objectContaining({ id: "test", email: "test@example.com", imap_host: "127.0.0.1" }),
       ]);
@@ -92,6 +99,8 @@ describe("MCP HTTP tools", () => {
     server = createOpenMailServer({
       store: new ConfigCredentialStore(config, {}),
       imap: createImapGateway(),
+      smtp: createSmtpGateway(),
+      sends: createMemorySendRecorder(),
       apiKeyHashes: hashApiKeys(KEY),
     });
     server.listen(0, "127.0.0.1");

@@ -27,6 +27,11 @@ export interface ImapGateway {
   withClient<T>(account: AccountCredentials, fn: (session: ImapSession) => Promise<T>): Promise<T>;
   /** Opens the mailbox with EXAMINE (`readOnly: true`) and releases the lock afterwards. */
   withMailbox<T>(account: AccountCredentials, folder: string, fn: (session: ImapSession) => Promise<T>): Promise<T>;
+  /**
+   * APPEND one message. Does not SELECT or EXAMINE any mailbox, so it cannot
+   * change flags on mail that is already there. This is the only IMAP write.
+   */
+  appendMessage(account: AccountCredentials, folder: string, raw: Buffer, flags: string[]): Promise<void>;
 }
 
 interface ExecResult {
@@ -51,6 +56,8 @@ interface ImapClient {
       untagged?: Record<string, (response: { attributes?: unknown }) => void>;
     },
   ): Promise<ExecResult>;
+  /** APPEND does not select the mailbox and does not change flags on other messages. */
+  append?(path: string, content: Buffer | string, flags?: string[]): Promise<unknown>;
 }
 
 export interface ImapGatewayOptions {
@@ -75,6 +82,12 @@ export function createImapGateway(
         } finally {
           lock.release();
         }
+      });
+    },
+    appendMessage(account, folder, raw, flags) {
+      return run(factory, resolve, account, async (_session, client) => {
+        if (!client.append) throw new Error("APPEND is not available");
+        await client.append(folder, raw, flags);
       });
     },
   };

@@ -10,14 +10,18 @@ import {
   searchMessages,
   type MailDeps,
 } from "../mail/operations.js";
+import { sendMessage, type SendDeps } from "../mail/send.js";
 import type { ToolResult } from "../mail/result.js";
 import {
   READ_ONLY_ANNOTATIONS,
+  SEND_ANNOTATIONS,
+  SEND_MESSAGE_DESCRIPTION,
   listAccountsInput,
   listFoldersInput,
   readMessageInput,
   readThreadInput,
   searchMessagesInput,
+  sendMessageInput,
   toolDescription,
 } from "./schemas.js";
 
@@ -31,18 +35,22 @@ export function toCallToolResult(result: ToolResult<unknown>): CallToolResult {
   return result.ok ? payload : { ...payload, isError: true };
 }
 
-export function createMailMcpServer(deps: MailDeps & { userId: string }): McpServer {
+export interface MailServerDeps extends MailDeps, Omit<SendDeps, "store" | "imap"> {
+  userId: string;
+}
+
+export function createMailMcpServer(deps: MailServerDeps): McpServer {
   const server = new McpServer(
     { name: "openmail", version: VERSION },
     {
-      instructions: `OpenMail exposes read-only IMAP tools. ${UNTRUSTED_CONTENT_WARNING}`,
+      instructions: `OpenMail reads mail (read-only, never marks as read) and can send email only when the user enabled sending for that mailbox and approved each message. ${UNTRUSTED_CONTENT_WARNING}`,
     },
   );
   registerMailTools(server, deps);
   return server;
 }
 
-export function registerMailTools(server: McpServer, deps: MailDeps & { userId: string }): void {
+export function registerMailTools(server: McpServer, deps: MailServerDeps): void {
   const userId = deps.userId;
 
   server.registerTool(
@@ -50,12 +58,12 @@ export function registerMailTools(server: McpServer, deps: MailDeps & { userId: 
     {
       title: "List accounts",
       description: toolDescription(
-        "List mailbox accounts: id, label, email address, provider preset, and IMAP host. Passwords are never returned.",
+        "List mailbox accounts: id, label, email address, provider preset, IMAP host, and whether sending is enabled. Passwords are never returned.",
       ),
       inputSchema: listAccountsInput,
       annotations: { ...READ_ONLY_ANNOTATIONS, title: "List accounts" },
     },
-    async () => toCallToolResult(await listAccounts(deps.store, userId)),
+    async () => toCallToolResult(await listAccounts(deps.store, userId, { canSend: deps.canSend })),
   );
 
   server.registerTool(
@@ -123,5 +131,40 @@ export function registerMailTools(server: McpServer, deps: MailDeps & { userId: 
       annotations: { ...READ_ONLY_ANNOTATIONS, title: "Read thread" },
     },
     async (args) => toCallToolResult(await readThread(deps, userId, args.account, args.folder, args.uid)),
+  );
+
+  server.registerTool(
+    "send_message",
+    {
+      title: "Send email",
+      description: toolDescription(SEND_MESSAGE_DESCRIPTION),
+      inputSchema: sendMessageInput,
+      annotations: { ...SEND_ANNOTATIONS, title: "Send email" },
+    },
+    async (args) =>
+      toCallToolResult(
+        await sendMessage(deps, userId, {
+          account: args.account,
+          ...(args.to ? { to: args.to } : {}),
+          ...(args.cc ? { cc: args.cc } : {}),
+          ...(args.bcc ? { bcc: args.bcc } : {}),
+          ...(args.subject !== undefined ? { subject: args.subject } : {}),
+          body: args.body,
+          ...(args.html !== undefined ? { html: args.html } : {}),
+          ...(args.from_name !== undefined ? { from_name: args.from_name } : {}),
+          ...(args.reply_to
+            ? {
+                reply_to: {
+                  folder: args.reply_to.folder,
+                  uid: args.reply_to.uid,
+                  mode: args.reply_to.mode,
+                  quote_original: args.reply_to.quote_original,
+                  include_attachments: args.reply_to.include_attachments,
+                },
+              }
+            : {}),
+          user_confirmed: args.user_confirmed,
+        }),
+      ),
   );
 }

@@ -37,6 +37,9 @@ describe("plain IMAP allowlist", () => {
     imap: { host, port: 3143, secure: false },
     smtp: { host, port: 3025, secure: false, starttls: false },
     allowInsecureLocalhost: false,
+    sendEnabled: false,
+    smtpAuth: { user: "a", pass: "p" },
+    autoSavesSent: false,
     ...(list ? { insecureImapHosts: list } : {}),
   });
 

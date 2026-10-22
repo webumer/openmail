@@ -53,14 +53,25 @@ describe("api key records", () => {
         createdAt: created.createdAt,
         lastUsedAt: null,
         revokedAt: null,
+        canSend: false,
       },
     ]);
     expect(JSON.stringify(listed)).not.toContain(created.token);
 
     const t0 = Date.parse("2026-01-01T00:00:00.000Z");
-    expect(apiKeys.resolve(db, created.token, t0)).toEqual({ userId: owner.id, keyId: created.id });
+    expect(apiKeys.resolve(db, created.token, t0)).toEqual({
+      userId: owner.id,
+      keyId: created.id,
+      canSend: false,
+      name: "Laptop",
+    });
     expect(apiKeys.list(db, owner.id)[0]?.lastUsedAt).toBe(new Date(t0).toISOString());
-    expect(apiKeys.resolve(db, created.token, t0 + 1_000)).toEqual({ userId: owner.id, keyId: created.id });
+    expect(apiKeys.resolve(db, created.token, t0 + 1_000)).toEqual({
+      userId: owner.id,
+      keyId: created.id,
+      canSend: false,
+      name: "Laptop",
+    });
     expect(apiKeys.list(db, owner.id)[0]?.lastUsedAt).toBe(new Date(t0).toISOString());
     const later = t0 + API_KEY_TOUCH_INTERVAL_MS;
     expect(apiKeys.resolve(db, created.token, later)?.keyId).toBe(created.id);
@@ -74,5 +85,23 @@ describe("api key records", () => {
     expect(apiKeys.resolve(db, created.token, later + API_KEY_TOUCH_INTERVAL_MS)).toBeNull();
     expect(apiKeys.list(db, owner.id)[0]?.revokedAt).toEqual(expect.any(String));
     expect(apiKeys.list(db, other.id)).toEqual([]);
+  });
+
+  it("stores send permission only when asked", async () => {
+    const db = openDatabase(":memory:");
+    open.push(db);
+    migrate(db);
+    const master = loadMasterKey(generateTestMasterKey());
+    const owner = await users.create(db, master, { email: "ada@example.com", password: "correct-horse" });
+    const readOnly = apiKeys.create(db, { userId: owner.id, name: "Read" });
+    const sending = apiKeys.create(db, { userId: owner.id, name: "Send", canSend: true });
+    expect(readOnly.canSend).toBe(false);
+    expect(sending.canSend).toBe(true);
+    expect(apiKeys.resolve(db, readOnly.token)?.canSend).toBe(false);
+    expect(apiKeys.resolve(db, sending.token)?.canSend).toBe(true);
+    expect(apiKeys.list(db, owner.id).map((key) => [key.name, key.canSend]).sort()).toEqual([
+      ["Read", false],
+      ["Send", true],
+    ]);
   });
 });

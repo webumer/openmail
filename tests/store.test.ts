@@ -20,6 +20,7 @@ describe("ConfigCredentialStore", () => {
         email: "you@example.com",
         preset: "migadu",
         imapHost: "imap.migadu.com",
+        sendEnabled: false,
       },
     ]);
     expect(JSON.stringify(listed)).not.toContain(SECRET);

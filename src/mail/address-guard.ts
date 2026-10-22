@@ -78,42 +78,71 @@ export interface ConnectTarget {
   servername?: string;
 }
 
+export interface HostTargetInput {
+  host: string;
+  allowInsecureLocalhost: boolean;
+  insecureHosts?: readonly string[];
+  /** Wording in errors. The check itself is the same for IMAP and SMTP. */
+  protocol: "IMAP" | "SMTP";
+}
+
 /**
- * Resolves the IMAP host once, refuses private addresses, and pins the
+ * Resolves a mail host once, refuses private addresses, and pins the
  * connection to the address that was checked. Re-checking at connect time
- * (not only when the account was saved) closes the DNS-rebinding window:
- * a hostname that later resolves to 127.0.0.1 or 169.254.169.254 is refused,
- * and the socket cannot be redirected between the check and the connect.
- * TLS still verifies the certificate against the original hostname.
+ * closes the DNS-rebinding window: a hostname that later resolves to
+ * 127.0.0.1 or 169.254.169.254 is refused, and the socket cannot be
+ * redirected between the check and the connect. TLS still verifies the
+ * certificate against the original hostname.
  *
  * Exceptions are operator-controlled only: loopback when
  * `allowInsecureLocalhost` is set (local tests) and exact hostnames on the
- * plain-IMAP allowlist (the internal reviewer demo mailbox).
+ * plain-protocol allowlist (the internal reviewer demo mailbox).
  */
-export async function resolveConnectTarget(
-  account: AccountCredentials,
+export async function resolveHostTarget(
+  input: HostTargetInput,
   resolve: Resolver = defaultResolver,
 ): Promise<ConnectTarget> {
-  const raw = account.imap.host.trim();
-  if (account.allowInsecureLocalhost && isLoopbackHost(raw)) return { host: raw };
-  if (isAllowlistedInsecureHost(raw, account.insecureImapHosts)) return { host: raw };
+  const raw = input.host.trim();
+  if (input.allowInsecureLocalhost && isLoopbackHost(raw)) return { host: raw };
+  if (isAllowlistedInsecureHost(raw, input.insecureHosts)) return { host: raw };
   const host = raw.toLowerCase().replace(/^\[|\]$/g, "");
   if (isIP(host)) {
-    if (isPrivateAddress(host)) throw blocked();
+    if (isPrivateAddress(host)) throw blocked(input.protocol);
     return { host };
   }
   let addresses: string[];
   try {
     addresses = await resolve(host);
   } catch {
-    throw new MailError("imap_error", "IMAP host could not be resolved");
+    throw unresolved(input.protocol);
   }
-  if (addresses.length === 0) throw new MailError("imap_error", "IMAP host could not be resolved");
-  if (addresses.some(isPrivateAddress)) throw blocked();
+  if (addresses.length === 0) throw unresolved(input.protocol);
+  if (addresses.some(isPrivateAddress)) throw blocked(input.protocol);
   const first = addresses[0] as string;
   return { host: first, servername: host };
 }
 
-function blocked(): MailError {
-  return new MailError("blocked_host", "IMAP host must be a public internet address");
+/** IMAP wrapper around {@link resolveHostTarget}. */
+export async function resolveConnectTarget(
+  account: AccountCredentials,
+  resolve: Resolver = defaultResolver,
+): Promise<ConnectTarget> {
+  return resolveHostTarget(
+    {
+      host: account.imap.host,
+      allowInsecureLocalhost: account.allowInsecureLocalhost,
+      ...(account.insecureImapHosts ? { insecureHosts: account.insecureImapHosts } : {}),
+      protocol: "IMAP",
+    },
+    resolve,
+  );
+}
+
+function unresolved(protocol: "IMAP" | "SMTP"): MailError {
+  const code = protocol === "IMAP" ? "imap_error" : "smtp_error";
+  return new MailError(code, `${protocol} host could not be resolved`);
+}
+
+function blocked(protocol: "IMAP" | "SMTP"): MailError {
+  return new MailError("blocked_host", `${protocol} host must be a public internet address`);
 }

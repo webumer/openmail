@@ -12,6 +12,8 @@ import type Database from "better-sqlite3";
 import { generateTestMasterKey, loadMasterKey } from "../src/crypto/index.js";
 import { migrate, openDatabase } from "../src/db/index.js";
 import type { ImapGateway } from "../src/mail/imap-gateway.js";
+import { createSmtpGateway } from "../src/mail/smtp-gateway.js";
+import { createMemorySendRecorder } from "../src/services/send-log.js";
 import { authenticateDatabaseKey, createOpenMailServer } from "../src/server/index.js";
 import { apiKeys, mailAccounts, users } from "../src/services/index.js";
 import { SqliteCredentialStore } from "../src/store/index.js";
@@ -28,6 +30,9 @@ const imap: ImapGateway = {
     return Promise.reject(new Error("IMAP must not run in OAuth tests"));
   },
   withMailbox() {
+    return Promise.reject(new Error("IMAP must not run in OAuth tests"));
+  },
+  appendMessage() {
     return Promise.reject(new Error("IMAP must not run in OAuth tests"));
   },
 };
@@ -66,6 +71,7 @@ describe("OAuth 2.1 authorization server", () => {
       db,
       masterKey: master,
       imap,
+      smtp: createSmtpGateway(),
       publicUrl: "https://mcp.example.test",
       trustProxy: false,
       allowInsecureLocalhost: false,
@@ -75,6 +81,8 @@ describe("OAuth 2.1 authorization server", () => {
     server = createOpenMailServer({
       store: new SqliteCredentialStore(db, master),
       imap,
+      smtp: createSmtpGateway(),
+      sends: createMemorySendRecorder(),
       authenticate: (header) => authenticateDatabaseKey(db, header, config.resource),
       web: async (req, res) => (oauth ? await oauth(req, res) : false) || (await web(req, res)),
       challenge: (invalid) => bearerChallenge(config, invalid),
@@ -143,7 +151,12 @@ describe("OAuth 2.1 authorization server", () => {
   }
 
   /** GET authorize (already logged in) → consent → Allow. Returns the redirect Location. */
-  async function consent(jar: CookieJar, params: Record<string, string>, decision = "allow"): Promise<URL> {
+  async function consent(
+    jar: CookieJar,
+    params: Record<string, string>,
+    decision = "allow",
+    extra: Record<string, string> = {},
+  ): Promise<URL> {
     const page = await fetchJar(jar, authorizeUrl(params));
     expect(page.status).toBe(200);
     const html = await readHtml(page);
@@ -152,6 +165,7 @@ describe("OAuth 2.1 authorization server", () => {
       form.set(match[1] as string, decodeEntities(match[2] as string));
     }
     form.set("decision", decision);
+    for (const [name, value] of Object.entries(extra)) form.set(name, value);
     const post = await fetchJar(jar, `${base}/oauth/authorize`, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -216,7 +230,7 @@ describe("OAuth 2.1 authorization server", () => {
       const body = (await res.json()) as Record<string, unknown>;
       expect(body.resource).toBe(`${base}/mcp`);
       expect(body.authorization_servers).toEqual([base]);
-      expect(body.scopes_supported).toEqual(["mail.read"]);
+      expect(body.scopes_supported).toEqual(["mail.read", "mail.send"]);
     }
     const asm = (await (await fetch(`${base}/.well-known/oauth-authorization-server`)).json()) as Record<string, unknown>;
     expect(asm.issuer).toBe(base);
@@ -236,7 +250,7 @@ describe("OAuth 2.1 authorization server", () => {
     expect(res.status).toBe(401);
     const header = res.headers.get("www-authenticate") ?? "";
     expect(header).toContain(`resource_metadata="${base}/.well-known/oauth-protected-resource/mcp"`);
-    expect(header).toContain('scope="mail.read"');
+    expect(header).toContain('scope="mail.read mail.send"');
     expect(header).not.toContain("invalid_token");
     expect(res.headers.get("access-control-expose-headers")).toContain("www-authenticate");
     const bad = await fetch(`${base}/mcp`, { method: "POST", headers: { authorization: "Bearer oma_nope" }, body: "{}" });
@@ -785,12 +799,71 @@ describe("OAuth 2.1 authorization server", () => {
     const client2 = new Client({ name: "sdk", version: "1" });
     await client2.connect(new StreamableHTTPClientTransport(serverUrl, { authProvider: provider }));
     const tools = await client2.listTools();
-    expect(tools.tools.map((t) => t.name).sort()).toEqual(["list_accounts", "list_folders", "read_message", "read_thread", "search_messages"]);
+      expect(tools.tools.map((t) => t.name).sort()).toEqual([
+        "list_accounts",
+        "list_folders",
+        "read_message",
+        "read_thread",
+        "search_messages",
+        "send_message",
+      ]);
     for (const tool of tools.tools) {
-      expect(tool.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false, openWorldHint: false });
+      if (tool.name === "send_message") {
+        expect(tool.annotations).toMatchObject({
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: false,
+          openWorldHint: true,
+        });
+      } else {
+        expect(tool.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false, openWorldHint: false });
+      }
       expect(tool.annotations?.title ?? tool.title).toBeTruthy();
     }
     await client2.close();
+  });
+
+  it("grants mail.send only when the consent box is ticked", async () => {
+    const client = await register();
+    const clientId = client.client_id as string;
+    const jar = new CookieJar();
+    const userId = await signup(jar, "send@example.com");
+    addMailbox(userId, "Send Box", "send@work.example");
+    const { verifier, challenge } = pkce();
+    const params = standardParams(clientId, challenge, { scope: "mail.read mail.send" });
+    const page = await fetchJar(jar, authorizeUrl(params));
+    const html = await readHtml(page);
+    expect(html).toContain("wants access to your OpenMail mailboxes");
+    expect(html).toContain("Send email as you");
+    expect(html).toContain("Also allow");
+    expect(html).not.toContain('name="allow_send" type="checkbox" value="on" checked');
+
+    const denied = await consent(jar, params);
+    const without = await token({
+      grant_type: "authorization_code",
+      client_id: clientId,
+      code: denied.searchParams.get("code") as string,
+      redirect_uri: REDIRECT,
+      code_verifier: verifier,
+      resource: config.resource,
+    });
+    expect(without.body.scope).toBe("mail.read");
+
+    const { verifier: verifier2, challenge: challenge2 } = pkce();
+    const again = standardParams(clientId, challenge2, { scope: "mail.send" });
+    const allowed = await consent(jar, again, "allow", { allow_send: "on" });
+    const withSend = await token({
+      grant_type: "authorization_code",
+      client_id: clientId,
+      code: allowed.searchParams.get("code") as string,
+      redirect_uri: REDIRECT,
+      code_verifier: verifier2,
+      resource: config.resource,
+    });
+    expect(withSend.body.scope).toBe("mail.read mail.send");
+    const principal = authenticateDatabaseKey(db, `Bearer ${withSend.body.access_token as string}`, config.resource);
+    expect(principal?.canSend).toBe(true);
+    expect(principal?.via.startsWith("oauth:")).toBe(true);
   });
 });
 

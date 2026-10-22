@@ -1,6 +1,8 @@
-/** The one scope OpenMail issues. It covers every read-only mail tool. */
+/** Read tools. Issued on every grant. */
 export const MAIL_READ_SCOPE = "mail.read";
-export const SUPPORTED_SCOPES: readonly string[] = [MAIL_READ_SCOPE];
+/** Send tool. Granted only together with mail.read, and only when the user ticks the box. */
+export const MAIL_SEND_SCOPE = "mail.send";
+export const SUPPORTED_SCOPES: readonly string[] = [MAIL_READ_SCOPE, MAIL_SEND_SCOPE];
 
 export const ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
 export const REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
@@ -73,6 +75,8 @@ export function parseScope(raw: string | undefined): { ok: true; scope: string }
     if (!SUPPORTED_SCOPES.includes(part)) return { ok: false };
     granted.add(part);
   }
+  if (granted.has(MAIL_SEND_SCOPE)) granted.add(MAIL_READ_SCOPE);
   if (granted.size === 0) granted.add(MAIL_READ_SCOPE);
-  return { ok: true, scope: [...granted].join(" ") };
+  const ordered = SUPPORTED_SCOPES.filter((scope) => granted.has(scope));
+  return { ok: true, scope: ordered.join(" ") };
 }

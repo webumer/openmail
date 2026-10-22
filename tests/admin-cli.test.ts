@@ -25,6 +25,9 @@ function setup() {
     withMailbox() {
       return Promise.reject(new Error("not used"));
     },
+    appendMessage() {
+      return Promise.reject(new Error("not used"));
+    },
   };
   const lines: string[] = [];
   const io = (secret: string, env: Record<string, string | undefined> = {}) => ({

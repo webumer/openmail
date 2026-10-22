@@ -1,6 +1,7 @@
 import type { AppConfig } from "../config/schema.js";
 import { MailError } from "../errors.js";
 import { resolveEndpoints } from "../mail/presets.js";
+import { parseInsecureImapHosts, parseInsecureSmtpHosts } from "../mail/tls.js";
 import type { AccountCredentials, AccountSummary, CredentialStore } from "./types.js";
 
 export class ConfigCredentialStore implements CredentialStore {
@@ -18,6 +19,7 @@ export class ConfigCredentialStore implements CredentialStore {
         email: account.email,
         preset: account.preset,
         imapHost: endpoints.imap.host,
+        sendEnabled: account.allowSending === true,
       };
     });
   }
@@ -33,16 +35,24 @@ export class ConfigCredentialStore implements CredentialStore {
       );
     }
     const endpoints = resolveEndpoints(account);
+    const username = account.username ?? account.email;
+    const insecureImapHosts = parseInsecureImapHosts(this.env.OPENMAIL_INSECURE_IMAP_HOSTS);
+    const insecureSmtpHosts = parseInsecureSmtpHosts(this.env.OPENMAIL_INSECURE_SMTP_HOSTS);
     return {
       id: account.id,
       label: account.label,
       email: account.email,
       preset: account.preset,
-      username: account.username ?? account.email,
+      username,
       password,
       imap: endpoints.imap,
       smtp: endpoints.smtp,
       allowInsecureLocalhost: this.config.allowInsecureLocalhost,
+      sendEnabled: account.allowSending === true,
+      smtpAuth: { user: username, pass: password },
+      autoSavesSent: endpoints.autoSavesSent,
+      ...(insecureImapHosts.length > 0 ? { insecureImapHosts } : {}),
+      ...(insecureSmtpHosts.length > 0 ? { insecureSmtpHosts } : {}),
     };
   }
 }

@@ -111,6 +111,7 @@ function deps(imap: ReturnType<typeof createImapGateway>, credentials = account)
         email: credentials.email,
         preset: credentials.preset,
         imapHost: credentials.imap.host,
+        sendEnabled: credentials.sendEnabled,
       }];
     },
     async getAccount() {

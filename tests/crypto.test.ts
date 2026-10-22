@@ -4,7 +4,9 @@ import {
   generateTestMasterKey,
   loadMasterKey,
   openPassword,
+  openSmtpPassword,
   sealPassword,
+  sealSmtpPassword,
   unwrapDataKey,
   wrapDataKey,
 } from "../src/crypto/index.js";
@@ -53,6 +55,10 @@ describe("envelope encryption", () => {
     const again = sealPassword(dataKey, accountId, PASSWORD);
     expect(again.iv.equals(sealed.iv)).toBe(false);
     expect(openPassword(dataKey, accountId, sealed)).toBe(PASSWORD);
+    const smtpSealed = sealSmtpPassword(dataKey, accountId, PASSWORD);
+    expect(openSmtpPassword(dataKey, accountId, smtpSealed)).toBe(PASSWORD);
+    expect(() => openPassword(dataKey, accountId, smtpSealed)).toThrow("Decryption failed");
+    expect(() => openSmtpPassword(dataKey, accountId, sealed)).toThrow("Decryption failed");
     expect(sealed.ciphertext.toString("utf8")).not.toContain(PASSWORD);
     unwrapped.fill(0);
     dataKey.fill(0);

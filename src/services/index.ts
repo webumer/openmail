@@ -1,6 +1,11 @@
 import { create as createUser, remove as removeUser, setPassword as setUserPassword, verifyPassword } from "./users.js";
 import { create as createApiKey, importToken as importApiKey, list as listApiKeys, resolve as resolveApiKey, revoke as revokeApiKey } from "./api-keys.js";
-import { add as addMailAccount, list as listMailAccounts, remove as removeMailAccount } from "./mail-accounts.js";
+import {
+  add as addMailAccount,
+  list as listMailAccounts,
+  remove as removeMailAccount,
+  setSendEnabled,
+} from "./mail-accounts.js";
 
 export const users = {
   create: createUser,
@@ -21,6 +26,7 @@ export const mailAccounts = {
   add: addMailAccount,
   list: listMailAccounts,
   remove: removeMailAccount,
+  setSendEnabled,
 };
 
 export { API_KEY_TOUCH_INTERVAL_MS, MAX_ACTIVE_KEYS_PER_USER } from "./api-keys.js";

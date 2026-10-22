@@ -11,7 +11,9 @@ import type Database from "better-sqlite3";
 import { loadMasterKey } from "../crypto/index.js";
 import { migrate, openDatabase, resolveDatabasePath } from "../db/index.js";
 import { MailError, scrubSecret, toMailError } from "../errors.js";
-import { createImapGateway, isAllowlistedInsecureHost, parseInsecureImapHosts, type ImapGateway } from "../mail/index.js";
+import { createImapGateway, isAllowlistedInsecureHost, parseInsecureImapHosts, parseInsecureSmtpHosts, type ImapGateway } from "../mail/index.js";
+import { createSmtpGateway, type SmtpGateway } from "../mail/smtp-gateway.js";
+import { SqliteCredentialStore } from "../store/sqlite-store.js";
 import { resolveEndpoints, type ProviderPreset, type ZohoRegion } from "../mail/presets.js";
 import { apiKeys, mailAccounts, users } from "../services/index.js";
 import { parsePreset, parseZohoRegion } from "../services/validate.js";
@@ -24,14 +26,16 @@ export const USAGE = `Usage: admin <command> [options]
   set-password  --email <login email>                       new password on stdin; signs out web sessions, keeps API keys
   list-accounts --user <login email>
   add-account   --user <login email> --name <name> --email <mailbox address>
-                --preset <migadu|fastmail|zoho|icloud> [--username <u>] [--zoho-region <com|eu|in>]
+                --preset <migadu|fastmail|zoho|icloud|gmail> [--username <u>] [--zoho-region <com|eu|in>]
                 [--password-env <VAR>] [--skip-probe]        password on stdin unless --password-env
                 --preset custom --imap-host <h> --imap-port <p> --plain
                                                             only for a host in OPENMAIL_INSECURE_IMAP_HOSTS
   import-key    --user <login email> --name <key name>      existing key on stdin
+  enable-sending  --user <login email> --name <account name> [--skip-probe]
+  disable-sending --user <login email> --name <account name>
   delete-user   --email <login email> --yes                 removes the user, sessions, keys, mailboxes
 
-Environment: OPENMAIL_MASTER_KEY, OPENMAIL_DB_PATH, OPENMAIL_INSECURE_IMAP_HOSTS.`;
+Environment: OPENMAIL_MASTER_KEY, OPENMAIL_DB_PATH, OPENMAIL_INSECURE_IMAP_HOSTS, OPENMAIL_INSECURE_SMTP_HOSTS.`;
 
 export interface AdminIo {
   readSecret(): Promise<string>;
@@ -43,6 +47,7 @@ export interface AdminDeps {
   db: Database;
   masterKey: Buffer;
   imap: ImapGateway;
+  smtp?: SmtpGateway;
 }
 
 export function parseArgs(argv: readonly string[]): { command: string; flags: Map<string, string | true> } {
@@ -107,7 +112,9 @@ export async function runAdmin(argv: readonly string[], deps: AdminDeps, io: Adm
     case "list-accounts": {
       const userId = userIdFor(deps.db, text("user"));
       const rows = mailAccounts.list(deps.db, userId);
-      for (const row of rows) io.out(`${row.name}\t${row.id}\t${row.preset}\t${row.imapHost}`);
+      for (const row of rows) {
+        io.out(`${row.name}\t${row.id}\t${row.preset}\t${row.imapHost}\tsending=${row.sendEnabled ? "on" : "off"}`);
+      }
       io.out(`accounts=${rows.length}`);
       return;
     }
@@ -169,6 +176,37 @@ export async function runAdmin(argv: readonly string[], deps: AdminDeps, io: Adm
       io.out(`added account ${added.name} ${added.id}`);
       return;
     }
+    case "enable-sending":
+    case "disable-sending": {
+      const userId = userIdFor(deps.db, text("user"));
+      const name = text("name");
+      const row = mailAccounts.list(deps.db, userId).find((account) => account.name === name);
+      if (!row) throw new MailError("not_found", "Account was not found");
+      if (command === "disable-sending") {
+        mailAccounts.setSendEnabled(deps.db, userId, row.id, false);
+        io.out(`sending off ${row.name}`);
+        return;
+      }
+      if (flags.get("skip-probe") !== true) {
+        const smtp = deps.smtp ?? createSmtpGateway();
+        const store = new SqliteCredentialStore(deps.db, deps.masterKey, {
+          insecureImapHosts: parseInsecureImapHosts(io.env.OPENMAIL_INSECURE_IMAP_HOSTS),
+          insecureSmtpHosts: parseInsecureSmtpHosts(io.env.OPENMAIL_INSECURE_SMTP_HOSTS),
+        });
+        const account = await store.getAccount(userId, row.id);
+        if (!account) throw new MailError("not_found", "Account was not found");
+        try {
+          await smtp.verify(account);
+        } catch (err) {
+          const mail = err instanceof MailError ? err : toMailError(err, account.password);
+          throw new MailError(mail.code, scrubSecret(scrubSecret(mail.message, account.password), account.smtpAuth.pass));
+        }
+        io.out("smtp login ok");
+      }
+      mailAccounts.setSendEnabled(deps.db, userId, row.id, true);
+      io.out(`sending on ${row.name}`);
+      return;
+    }
     case "import-key": {
       const userId = userIdFor(deps.db, text("user"));
       const token = await io.readSecret();
@@ -216,6 +254,7 @@ async function probe(
     ? {
         imap: { host: input.custom.host, port: input.custom.port, secure: false },
         smtp: { host: input.custom.host, port: 3025, secure: false, starttls: false },
+        autoSavesSent: false,
       }
     : resolveEndpoints({ preset: input.preset, ...(input.zohoRegion ? { zohoRegion: input.zohoRegion } : {}) });
   const credentials: AccountCredentials = {
@@ -228,6 +267,9 @@ async function probe(
     imap: endpoints.imap,
     smtp: endpoints.smtp,
     allowInsecureLocalhost: false,
+    sendEnabled: false,
+    smtpAuth: { user: input.username, pass: input.password },
+    autoSavesSent: endpoints.autoSavesSent,
     ...(input.insecureImapHosts ? { insecureImapHosts: input.insecureImapHosts } : {}),
   };
   try {

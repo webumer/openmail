@@ -18,6 +18,7 @@ export const loginSchema = z.object({
 
 export const keySchema = z.object({
   name: z.string().trim().min(1, "Key name is required").max(200, "Key name must be 1 to 200 characters"),
+  permission: z.enum(["read", "send"]).default("read"),
 });
 
 const accountSchema = z
@@ -38,10 +39,20 @@ const accountSchema = z
     smtp_port: z.string().trim(),
     smtp_secure: z.string(),
     smtp_starttls: z.string(),
+    smtp_security: z.string(),
+    smtp_username: z.string().trim().max(200, "SMTP username must be at most 200 characters"),
+    smtp_password: z.string().max(1000, "SMTP password must be at most 1000 characters"),
   })
   .superRefine((value, ctx) => {
     if (value.preset === "zoho" && value.zoho_region && !isZohoRegion(value.zoho_region)) {
       ctx.addIssue({ code: "custom", path: ["zoho_region"], message: "Choose a Zoho region" });
+    }
+    if ((value.smtp_username.trim() === "") !== (value.smtp_password === "")) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["smtp_username"],
+        message: "Enter both the SMTP username and password, or leave both blank",
+      });
     }
     if (value.preset !== "custom") return;
     if (!hostOk(value.imap_host)) {
@@ -56,7 +67,8 @@ const accountSchema = z
     if (portNumber(value.smtp_port) === undefined) {
       ctx.addIssue({ code: "custom", path: ["smtp_port"], message: "SMTP port must be a whole number from 1 to 65535" });
     }
-    if (value.smtp_secure === "on" && value.smtp_starttls === "on") {
+    const smtp = smtpFlags(value);
+    if (smtp.secure && smtp.starttls) {
       ctx.addIssue({
         code: "custom",
         path: ["smtp_starttls"],
@@ -78,6 +90,7 @@ export interface AccountDraft {
   smtpPort: string;
   smtpSecure: boolean;
   smtpStarttls: boolean;
+  smtpUsername: string;
 }
 
 export interface ParsedAccount {
@@ -94,6 +107,8 @@ export interface ParsedAccount {
   smtpPort?: number;
   smtpSecure?: boolean;
   smtpStarttls?: boolean;
+  smtpUsername?: string;
+  smtpPassword?: string;
 }
 
 export interface AccountParse {
@@ -118,10 +133,10 @@ export function parseLogin(raw: Record<string, string>): { errors: string[]; ema
   return parseFields(loginSchema, raw);
 }
 
-export function parseKeyName(raw: Record<string, string>): { errors: string[]; name?: string } {
-  const parsed = keySchema.safeParse({ name: raw.name ?? "" });
+export function parseKeyName(raw: Record<string, string>): { errors: string[]; name?: string; canSend?: boolean } {
+  const parsed = keySchema.safeParse({ name: raw.name ?? "", permission: raw.permission === "send" ? "send" : "read" });
   if (!parsed.success) return { errors: issues(parsed.error) };
-  return { errors: [], name: parsed.data.name };
+  return { errors: [], name: parsed.data.name, canSend: parsed.data.permission === "send" };
 }
 
 export function parseAccountForm(raw: Record<string, string>): AccountParse {
@@ -140,6 +155,9 @@ export function parseAccountForm(raw: Record<string, string>): AccountParse {
     smtp_port: raw.smtp_port ?? "",
     smtp_secure: raw.smtp_secure ?? "",
     smtp_starttls: raw.smtp_starttls ?? "",
+    smtp_security: raw.smtp_security ?? "",
+    smtp_username: raw.smtp_username ?? "",
+    smtp_password: raw.smtp_password ?? "",
   });
   if (!parsed.success) return { draft, errors: issues(parsed.error) };
   const data = parsed.data;
@@ -164,12 +182,26 @@ export function parseAccountForm(raw: Record<string, string>): AccountParse {
     account.imapHost = data.imap_host;
     account.imapPort = imapPort;
     account.imapSecure = data.imap_secure === "on";
+    const smtp = smtpFlags(data);
     account.smtpHost = data.smtp_host;
     account.smtpPort = smtpPort;
-    account.smtpSecure = data.smtp_secure === "on";
-    account.smtpStarttls = data.smtp_starttls === "on";
+    account.smtpSecure = smtp.secure;
+    account.smtpStarttls = smtp.starttls;
+  }
+  if (data.smtp_username && data.smtp_password) {
+    account.smtpUsername = data.smtp_username;
+    account.smtpPassword = data.smtp_password;
   }
   return { draft, errors: [], account };
+}
+
+function smtpFlags(value: { smtp_security: string; smtp_secure: string; smtp_starttls: string }): {
+  secure: boolean;
+  starttls: boolean;
+} {
+  if (value.smtp_security === "tls") return { secure: true, starttls: false };
+  if (value.smtp_security === "starttls") return { secure: false, starttls: true };
+  return { secure: value.smtp_secure === "on", starttls: value.smtp_starttls === "on" };
 }
 
 function parseFields(
@@ -207,8 +239,9 @@ function draftFromRaw(raw: Record<string, string>): AccountDraft {
       imapSecure: raw.imap_secure === "on",
       smtpHost: clip(raw.smtp_host ?? ""),
       smtpPort: clip(raw.smtp_port ?? "", 5),
-      smtpSecure: raw.smtp_secure === "on",
-      smtpStarttls: raw.smtp_starttls === "on",
+      smtpSecure: raw.smtp_security === "tls" || (raw.smtp_security !== "starttls" && raw.smtp_secure === "on"),
+      smtpStarttls: raw.smtp_security === "starttls" || (raw.smtp_security !== "tls" && raw.smtp_starttls === "on"),
+      smtpUsername: clip(raw.smtp_username ?? ""),
     };
   }
   return draftFromEndpoints(preset, zohoRegion, identity);
@@ -234,6 +267,7 @@ function draftFromEndpoints(
     smtpPort: String(endpoints.smtp.port),
     smtpSecure: endpoints.smtp.secure,
     smtpStarttls: endpoints.smtp.starttls,
+    smtpUsername: "",
   };
 }
 

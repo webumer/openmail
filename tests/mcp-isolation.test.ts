@@ -8,6 +8,8 @@ import type Database from "better-sqlite3";
 import { generateTestMasterKey, loadMasterKey } from "../src/crypto/index.js";
 import { migrate, openDatabase } from "../src/db/index.js";
 import type { ImapGateway } from "../src/mail/imap-gateway.js";
+import { createSmtpGateway } from "../src/mail/smtp-gateway.js";
+import { createMemorySendRecorder } from "../src/services/send-log.js";
 import { authenticateDatabaseKey, createOpenMailServer } from "../src/server/index.js";
 import { apiKeys, mailAccounts, users } from "../src/services/index.js";
 import { SqliteCredentialStore } from "../src/store/index.js";
@@ -32,6 +34,10 @@ describe("MCP account isolation", () => {
       return Promise.reject(new Error("IMAP gateway must not run"));
     },
     withMailbox() {
+      imapCalls += 1;
+      return Promise.reject(new Error("IMAP gateway must not run"));
+    },
+    appendMessage() {
       imapCalls += 1;
       return Promise.reject(new Error("IMAP gateway must not run"));
     },
@@ -66,6 +72,8 @@ describe("MCP account isolation", () => {
     server = createOpenMailServer({
       store: new SqliteCredentialStore(db, master),
       imap,
+      smtp: createSmtpGateway(),
+      sends: createMemorySendRecorder(),
       authenticate: (header) => authenticateDatabaseKey(db, header),
     });
     server.listen(0, "127.0.0.1");

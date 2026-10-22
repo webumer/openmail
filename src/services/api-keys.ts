@@ -18,6 +18,7 @@ export interface CreatedApiKey {
   prefix: string;
   token: string;
   createdAt: string;
+  canSend: boolean;
 }
 
 export interface ApiKeySummary {
@@ -27,6 +28,7 @@ export interface ApiKeySummary {
   createdAt: string;
   lastUsedAt: string | null;
   revokedAt: string | null;
+  canSend: boolean;
 }
 
 interface KeyRow {
@@ -38,9 +40,10 @@ interface KeyRow {
   created_at: string;
   last_used_at: string | null;
   revoked_at: string | null;
+  can_send: number;
 }
 
-export function create(db: Database, input: { userId: string; name: string }): CreatedApiKey {
+export function create(db: Database, input: { userId: string; name: string; canSend?: boolean }): CreatedApiKey {
   const userId = requireId(input.userId, "userId");
   const name = requireLabel(input.name, "Key name");
   const user = db.prepare("SELECT id FROM users WHERE id = ?").get(userId);
@@ -54,11 +57,12 @@ export function create(db: Database, input: { userId: string; name: string }): C
   const generated = generateApiKey();
   const id = randomUUID();
   const createdAt = new Date().toISOString();
+  const canSend = input.canSend === true;
   db.prepare(
-    `INSERT INTO api_keys (id, user_id, name, prefix, key_hash, created_at, last_used_at, revoked_at)
-     VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)`,
-  ).run(id, userId, name, generated.prefix, generated.keyHash, createdAt);
-  return { id, name, prefix: generated.prefix, token: generated.token, createdAt };
+    `INSERT INTO api_keys (id, user_id, name, prefix, key_hash, created_at, last_used_at, revoked_at, can_send)
+     VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
+  ).run(id, userId, name, generated.prefix, generated.keyHash, createdAt, canSend ? 1 : 0);
+  return { id, name, prefix: generated.prefix, token: generated.token, createdAt, canSend };
 }
 
 /**
@@ -68,7 +72,7 @@ export function create(db: Database, input: { userId: string; name: string }): C
  */
 export function importToken(
   db: Database,
-  input: { userId: string; name: string; token: string },
+  input: { userId: string; name: string; token: string; canSend?: boolean },
 ): Omit<CreatedApiKey, "token"> {
   const userId = requireId(input.userId, "userId");
   const name = requireLabel(input.name, "Key name");
@@ -85,21 +89,22 @@ export function importToken(
   const id = randomUUID();
   const createdAt = new Date().toISOString();
   const prefix = token.slice(0, API_KEY_PREFIX_LENGTH);
+  const canSend = input.canSend === true;
   db.prepare(
-    `INSERT INTO api_keys (id, user_id, name, prefix, key_hash, created_at, last_used_at, revoked_at)
-     VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)`,
-  ).run(id, userId, name, prefix, keyHash, createdAt);
-  return { id, name, prefix, createdAt };
+    `INSERT INTO api_keys (id, user_id, name, prefix, key_hash, created_at, last_used_at, revoked_at, can_send)
+     VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
+  ).run(id, userId, name, prefix, keyHash, createdAt, canSend ? 1 : 0);
+  return { id, name, prefix, createdAt, canSend };
 }
 
 export function list(db: Database, userId: string): ApiKeySummary[] {
   const rows = db
     .prepare(
-      `SELECT id, name, prefix, created_at, last_used_at, revoked_at
+      `SELECT id, name, prefix, created_at, last_used_at, revoked_at, can_send
        FROM api_keys WHERE user_id = ? ORDER BY created_at, id`,
     )
     .all(requireId(userId, "userId")) as Array<
-    Pick<KeyRow, "id" | "name" | "prefix" | "created_at" | "last_used_at" | "revoked_at">
+    Pick<KeyRow, "id" | "name" | "prefix" | "created_at" | "last_used_at" | "revoked_at" | "can_send">
   >;
   return rows.map((row) => ({
     id: row.id,
@@ -108,6 +113,7 @@ export function list(db: Database, userId: string): ApiKeySummary[] {
     createdAt: row.created_at,
     lastUsedAt: row.last_used_at,
     revokedAt: row.revoked_at,
+    canSend: row.can_send === 1,
   }));
 }
 
@@ -124,19 +130,21 @@ export function resolve(
   db: Database,
   token: string,
   now = Date.now(),
-): { userId: string; keyId: string } | null {
+): { userId: string; keyId: string; canSend: boolean; name: string } | null {
   if (typeof token !== "string" || token.length === 0) return null;
   const digest = createHash("sha256").update(token, "utf8").digest();
   const row = db
-    .prepare("SELECT id, user_id, key_hash, revoked_at, last_used_at FROM api_keys WHERE key_hash = ?")
-    .get(hashApiKey(token)) as Pick<KeyRow, "id" | "user_id" | "key_hash" | "revoked_at" | "last_used_at"> | undefined;
+    .prepare("SELECT id, user_id, name, key_hash, revoked_at, last_used_at, can_send FROM api_keys WHERE key_hash = ?")
+    .get(hashApiKey(token)) as
+    | Pick<KeyRow, "id" | "user_id" | "name" | "key_hash" | "revoked_at" | "last_used_at" | "can_send">
+    | undefined;
   const stored = row ? Buffer.from(row.key_hash, "hex") : DUMMY_KEY_HASH;
   const matches = stored.length === digest.length && timingSafeEqual(stored, digest);
   if (!row || !matches || row.revoked_at) return null;
   if (shouldTouch(row.last_used_at, now)) {
     db.prepare("UPDATE api_keys SET last_used_at = ? WHERE id = ?").run(new Date(now).toISOString(), row.id);
   }
-  return { userId: row.user_id, keyId: row.id };
+  return { userId: row.user_id, keyId: row.id, canSend: row.can_send === 1, name: row.name };
 }
 
 function shouldTouch(lastUsedAt: string | null, now: number): boolean {

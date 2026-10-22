@@ -7,6 +7,8 @@ import type Database from "better-sqlite3";
 import { generateTestMasterKey, loadMasterKey } from "../../src/crypto/index.js";
 import { migrate, openDatabase } from "../../src/db/index.js";
 import { createImapGateway } from "../../src/mail/index.js";
+import { createSmtpGateway } from "../../src/mail/smtp-gateway.js";
+import { createMemorySendRecorder } from "../../src/services/send-log.js";
 import { authenticateDatabaseKey, createOpenMailServer } from "../../src/server/index.js";
 import { mailAccounts } from "../../src/services/index.js";
 import { SqliteCredentialStore } from "../../src/store/index.js";
@@ -43,6 +45,7 @@ describe.skipIf(!live)("web accounts against GreenMail", () => {
       db,
       masterKey: master,
       imap,
+      smtp: createSmtpGateway(),
       publicUrl: "https://mcp.openmail.tools",
       trustProxy: false,
       allowInsecureLocalhost: true,
@@ -52,6 +55,8 @@ describe.skipIf(!live)("web accounts against GreenMail", () => {
     server = createOpenMailServer({
       store: new SqliteCredentialStore(db, master, { allowInsecureLocalhost: true }),
       imap,
+      smtp: createSmtpGateway(),
+      sends: createMemorySendRecorder(),
       authenticate: (header) => authenticateDatabaseKey(db, header),
       web,
       security: { publicUrl: "https://mcp.openmail.tools" },

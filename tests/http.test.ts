@@ -4,7 +4,9 @@ import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseConfig } from "../src/config/index.js";
 import { createImapGateway } from "../src/mail/index.js";
+import { createSmtpGateway } from "../src/mail/smtp-gateway.js";
 import { BODY_LIMIT_BYTES, createOpenMailServer, hashApiKeys } from "../src/server/index.js";
+import { createMemorySendRecorder } from "../src/services/send-log.js";
 import { ConfigCredentialStore } from "../src/store/index.js";
 
 const KEY = "unit-test-key";
@@ -64,6 +66,8 @@ describe("http server", () => {
     server = createOpenMailServer({
       store: new ConfigCredentialStore(config),
       imap: createImapGateway(),
+      smtp: createSmtpGateway(),
+      sends: createMemorySendRecorder(),
       apiKeyHashes: hashApiKeys(KEY),
       ...(rateLimit ? { rateLimit } : {}),
     });
