@@ -186,6 +186,47 @@ describe("OAuth 2.1 authorization server", () => {
     return new URL(refresh.slice("0; url=".length));
   }
 
+  /**
+   * Submits only the controls that are descendants of the authorize form,
+   * the way a browser would. A checkbox counts only when it is ticked.
+   */
+  async function submitAuthorizeForm(
+    jar: CookieJar,
+    html: string,
+    options: { allowSend: boolean; decision?: string },
+  ): Promise<URL> {
+    const matched = /<form\b[^>]*\baction="\/oauth\/authorize"[^>]*>([\s\S]*?)<\/form>/.exec(html);
+    const formHtml = matched?.[1];
+    if (!matched || !formHtml) throw new Error("authorize form missing");
+    const fields = new URLSearchParams();
+    for (const match of formHtml.matchAll(/<input\b([^>]*)>/gi)) {
+      const tag = match[1] ?? "";
+      const name = /\bname="([^"]*)"/.exec(tag)?.[1];
+      if (!name) continue;
+      const type = (/\btype="([^"]*)"/.exec(tag)?.[1] ?? "text").toLowerCase();
+      const value = /\bvalue="([^"]*)"/.exec(tag)?.[1] ?? "";
+      if (type === "checkbox") {
+        if (options.allowSend) fields.set(name, decodeEntities(value));
+        continue;
+      }
+      fields.set(name, decodeEntities(value));
+    }
+    const decision = options.decision ?? "allow";
+    if (!new RegExp(`<button\\b(?=[^>]*\\bname="decision")(?=[^>]*\\bvalue="${decision}")[^>]*>`).test(formHtml)) {
+      throw new Error(`decision ${decision} is not in the authorize form`);
+    }
+    fields.set("decision", decision);
+    const post = await fetchJar(jar, `${base}/oauth/authorize`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: fields,
+    });
+    expect(post.status).toBe(200);
+    const refresh = post.headers.get("refresh") as string;
+    expect(refresh.startsWith("0; url=")).toBe(true);
+    return new URL(refresh.slice("0; url=".length));
+  }
+
   async function token(form: Record<string, string>, headers: Record<string, string> = {}): Promise<{ status: number; body: Record<string, unknown> }> {
     const res = await fetch(`${base}/oauth/token`, {
       method: "POST",
@@ -849,9 +890,14 @@ describe("OAuth 2.1 authorization server", () => {
     expect(html).toContain("wants access to your OpenMail mailboxes");
     expect(html).toContain("Send email as you");
     expect(html).toContain("Also allow");
-    expect(html).not.toContain('name="allow_send" type="checkbox" value="on" checked');
+    const form = /<form\b[^>]*\baction="\/oauth\/authorize"[^>]*>[\s\S]*?<\/form>/.exec(html)?.[0] ?? "";
+    expect(form).toContain('name="allow_send"');
+    expect(form).not.toContain("checked");
+    expect(html.replace(form, "")).not.toContain('name="allow_send"');
+    const willNot = html.slice(html.indexOf("It will not be able to"));
+    expect(willNot).toContain("Send email unless you tick the box above");
 
-    const denied = await consent(jar, params);
+    const denied = await submitAuthorizeForm(jar, html, { allowSend: false });
     const without = await token({
       grant_type: "authorization_code",
       client_id: clientId,
@@ -864,7 +910,8 @@ describe("OAuth 2.1 authorization server", () => {
 
     const { verifier: verifier2, challenge: challenge2 } = pkce();
     const again = standardParams(clientId, challenge2, { scope: "mail.send" });
-    const allowed = await consent(jar, again, "allow", { allow_send: "on" });
+    const againPage = await fetchJar(jar, authorizeUrl(again));
+    const allowed = await submitAuthorizeForm(jar, await readHtml(againPage), { allowSend: true });
     const withSend = await token({
       grant_type: "authorization_code",
       client_id: clientId,

@@ -659,6 +659,13 @@ export function consentPage(view: ConsentView): string {
       : `<ul class="consent-list">${view.accounts
           .map((a) => `<li>${icon("inbox")}<span><strong>${escapeHtml(a.name)}</strong> · ${escapeHtml(a.email)}</span></li>`)
           .join("")}</ul>`;
+  const sendChoice = view.sendRequested
+    ? `<h2>Send email as you</h2>
+<label class="check"><input name="allow_send" type="checkbox" value="on"> Also allow ${escapeHtml(view.clientName)} to send email from mailboxes where you turned on sending. Your assistant must show you each email and ask before sending.</label>`
+    : "";
+  const cannotSend = view.sendRequested
+    ? "Send email unless you tick the box above. It cannot delete, move or flag mail, or mark it as read"
+    : "Send, delete, move or flag mail, or mark it as read";
   return layout(
     "Allow access · OpenMail",
     `<div class="auth"><div class="card auth-card consent">
@@ -672,26 +679,23 @@ ${loopback}
 <li>${icon("check")}<span>List your mailboxes and folders</span></li>
 <li>${icon("check")}<span>Search and read your messages and threads</span></li>
 </ul>
-${
-    view.sendRequested
-      ? `<h2>Send email as you</h2>
-<label class="check"><input name="allow_send" type="checkbox" value="on"> Also allow ${escapeHtml(view.clientName)} to send email from mailboxes where you turned on sending. Your assistant must show you each email and ask before sending.</label>`
-      : ""
-  }
+<form method="post" action="/oauth/authorize">
+<input type="hidden" name="_csrf" value="${escapeHtml(view.csrf)}">
+${hidden}
+${sendChoice}
 <h2>It will not be able to</h2>
 <ul class="consent-list">
-<li>${icon("lock")}<span>${view.sendRequested ? "Delete, move or flag mail, or mark it as read" : "Send, delete, move or flag mail, or mark it as read"}</span></li>
+<li>${icon("lock")}<span>${cannotSend}</span></li>
 <li>${icon("lock")}<span>See your mailbox passwords or your OpenMail password</span></li>
 </ul>
 <h2>Mailboxes it can read</h2>
 ${mailboxes}
 <p>After you choose, you will be sent back to <strong>${escapeHtml(view.redirectHost)}</strong>:</p>
 <p class="fine consent-url">${escapeHtml(view.redirectUri)}</p>
-<form method="post" action="/oauth/authorize" class="consent-actions">
-<input type="hidden" name="_csrf" value="${escapeHtml(view.csrf)}">
-${hidden}
+<div class="consent-actions">
 <button class="btn btn-primary" type="submit" name="decision" value="allow">Allow</button>
 <button class="btn btn-secondary" type="submit" name="decision" value="deny">Deny</button>
+</div>
 </form>
 <p class="fine">You can disconnect it at any time under Connected apps on your dashboard.</p>
 </div></div>`,
