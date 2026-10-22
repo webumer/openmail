@@ -213,13 +213,21 @@ describe("web setup app", () => {
     expect(home).toContain('href="/privacy"');
     expect(home).toContain('rel="icon"');
     expect(home).toContain('src="/logo.svg"');
-    for (const path of ["/privacy", "/terms", "/reviewers"]) {
+    for (const path of ["/privacy", "/terms", "/reviewers", "/support"]) {
       const page = await fetch(`${base}${path}`);
       expect(page.status).toBe(200);
       expectSecurityHeaders(page, true);
       const html = await page.text();
       expect(html).toContain("support@openmail.tools");
     }
+    const privacy = await (await fetch(`${base}/privacy`)).text();
+    expect(privacy).toContain("What OpenMail returns to your assistant");
+    expect(privacy).toContain("14 days");
+    expect(privacy).toContain("within 30 days");
+    const support = await (await fetch(`${base}/support`)).text();
+    expect(support).toContain("https://github.com/webumer/openmail/issues");
+    expect(support).toContain("app password");
+    expect(home).toContain('href="/support"');
     const guide = await (await fetch(`${base}/reviewers`)).text();
     expect(guide).toContain("<h1>OpenMail");
     expect(guide).toContain("<table>");

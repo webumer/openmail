@@ -1,6 +1,6 @@
 {
   "name": "openmail",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Read and search any IMAP mailbox (Migadu, Fastmail, Zoho, iCloud, Gmail app password, self-hosted) from your agent. Read-only: never marks mail as read, stores no mail content.",
   "author": {
     "name": "Umer Sulman",

@@ -26,6 +26,7 @@ import {
   privacyPage,
   statusPage,
   reviewersPage,
+  supportPage,
   termsPage,
 } from "./pages.js";
 import { renderMarkdown } from "./markdown.js";
@@ -134,6 +135,7 @@ async function route(req: IncomingMessage, res: ServerResponse, url: URL, handle
   if (pathname === "/privacy" && req.method === "GET") return renderStatic(req, res, handler, "privacy");
   if (pathname === "/terms" && req.method === "GET") return renderStatic(req, res, handler, "terms");
   if (pathname === "/reviewers" && req.method === "GET") return renderStatic(req, res, handler, "reviewers");
+  if (pathname === "/support" && req.method === "GET") return renderStatic(req, res, handler, "support");
   if (pathname === "/signup" && req.method === "GET") return renderAuth(req, res, url, handler, "signup");
   if (pathname === "/signup" && req.method === "POST") return submitAuth(req, res, handler, "signup");
   if (pathname === "/login" && req.method === "GET") return renderAuth(req, res, url, handler, "login");
@@ -157,6 +159,7 @@ function isWebPath(pathname: string): boolean {
     pathname === "/privacy" ||
     pathname === "/terms" ||
     pathname === "/reviewers" ||
+    pathname === "/support" ||
     pathname === "/logo.svg" ||
     pathname === "/logo.png" ||
     pathname === "/favicon.ico" ||
@@ -206,13 +209,19 @@ function renderStatic(
   req: IncomingMessage,
   res: ServerResponse,
   handler: Handler,
-  page: "privacy" | "terms" | "reviewers",
+  page: "privacy" | "terms" | "reviewers" | "support",
 ): void {
   req.resume();
   const session = readSession(handler.db, readCookies(cookieHeader(req)).get(SESSION_COOKIE));
   const csrf = session ? { csrf: session.csrfSecret } : {};
   const html =
-    page === "privacy" ? privacyPage(csrf) : page === "terms" ? termsPage(csrf) : reviewersPage(REVIEWER_GUIDE_HTML, csrf);
+    page === "privacy"
+      ? privacyPage(csrf)
+      : page === "terms"
+        ? termsPage(csrf)
+        : page === "support"
+          ? supportPage(csrf)
+          : reviewersPage(REVIEWER_GUIDE_HTML, csrf);
   writeHtml(res, 200, html);
 }
 

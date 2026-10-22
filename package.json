@@ -1,6 +1,6 @@
 {
   "name": "openmail",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Hosted, provider-agnostic IMAP/SMTP MCP server for AI agents",
   "type": "module",
   "license": "MIT",

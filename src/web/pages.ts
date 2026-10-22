@@ -71,7 +71,7 @@ ${body}
 <footer class="site-footer"><div class="container footer-inner">
 <div class="footer-brand"><a class="brand" href="/">${LOGO_MARK}<span>OpenMail</span></a><p>Email for AI assistants. Read-only, any IMAP provider.</p></div>
 <nav class="footer-links" aria-label="Footer">
-<a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/reviewers">Reviewers</a><a href="https://github.com/webumer/openmail" rel="noopener">GitHub</a><a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>
+<a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/support">Support</a><a href="/reviewers">Reviewers</a><a href="https://github.com/webumer/openmail" rel="noopener">GitHub</a><a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>
 </nav>
 <p class="copyright">© 2026 OpenMail</p>
 </div></footer>
@@ -250,19 +250,71 @@ export function privacyPage(options: { csrf?: string } = {}): string {
 <li>Email messages, attachments, subjects, or contacts. They are fetched from your provider when your agent asks and passed straight back to it.</li>
 <li>Plain-text passwords, API keys or OAuth tokens. They are never written to logs.</li>
 </ul>
+<h2>What OpenMail returns to your assistant</h2>
+<p>When an assistant you connected calls OpenMail, it can receive:</p>
+<ul>
+<li>For each mailbox: its name, address, provider preset, IMAP server name and an internal account ID.</li>
+<li>For each message: sender and recipient names and addresses, subject, date, message ID, read and flag status, size, the message text, and attachment names, types and sizes. Attachment files themselves are never returned.</li>
+<li>Folder names with message and unread counts.</li>
+</ul>
+<p>Nothing else about you is returned. Mailbox passwords and your OpenMail password are never returned.</p>
 <h2>How your data is used</h2>
-<p>Mailbox credentials are used only to sign in to your provider when you, or an agent holding one of your API keys or an app you approved, make a request. OpenMail does not sell, share, or analyse your data, and does not use it for advertising or for training models.</p>
+<p>Mailbox credentials are used only to sign in to your provider when you, or an agent holding one of your API keys or an app you approved, make a request. OpenMail does not sell, share, or analyse your data, and does not use it for advertising, profiling or training models.</p>
 <h2>Your agent</h2>
 <p>Messages OpenMail returns go to the agent you connected. How that agent and its provider handle them is covered by their own policies.</p>
+<h2>Where your data is stored and who helps us run OpenMail</h2>
+<p>OpenMail runs on a server rented from Contabo GmbH in the European Union. These providers handle limited data for us:</p>
+<ul>
+<li>Contabo GmbH: server hosting, where the database and logs are kept.</li>
+<li>Cloudflare: DNS for openmail.tools, and forwarding of mail sent to ${SUPPORT_EMAIL}. Traffic to the service itself does not pass through Cloudflare.</li>
+<li>Google (Gmail): the inbox where support email is read.</li>
+<li>Let's Encrypt: HTTPS certificates. It receives no user data.</li>
+</ul>
+<p>Your mail provider is the one you choose. OpenMail connects to it only on your behalf.</p>
+<h2>How long we keep data</h2>
+<ul>
+<li>Email content: not kept. It is held in memory only while a request is answered.</li>
+<li>Account and mailbox settings: until you remove the mailbox or your account is deleted.</li>
+<li>Signed-in browser sessions: 7 days. OAuth access tokens: 1 hour. OAuth refresh tokens: 30 days. API keys: until you revoke them.</li>
+<li>Web server access logs (IP address, time, address requested, browser type and response status; never passwords, tokens or cookies): 14 days, then deleted automatically.</li>
+</ul>
 <h2>Security</h2>
 <p>All traffic uses HTTPS. Access is read-only: OpenMail cannot send, delete, move, or flag mail. Revoke an API key, disconnect an app or remove a mailbox from your dashboard at any time, and it stops working immediately.</p>
 <h2>Deleting your data</h2>
-<p>Removing a mailbox deletes its stored settings and encrypted password. To delete your whole account, email <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a> from your login address.</p>
+<p>Removing a mailbox in your dashboard immediately deletes its stored settings and encrypted password. To delete your whole account, email <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a> from your login address. We delete it within 30 days, usually much sooner. Deletion removes your login, sessions, API keys, connected apps and every mailbox with its encrypted password from the database at once. OpenMail keeps no other copies.</p>
+<h2>Requests from authorities</h2>
+<p>We disclose data only when legally required, share only the minimum needed, and tell the affected user unless we are not allowed to.</p>
 <h2>Changes</h2>
 <p>If this policy changes, the date above changes too. Material changes will be announced on this site.</p>
 <h2>Contact</h2>
 <p><a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a></p></article>`,
     { ...options, path: "/privacy", description: "What OpenMail stores, what it does not, and how your mailbox credentials are protected." },
+  );
+}
+
+export function supportPage(options: { csrf?: string } = {}): string {
+  return layout(
+    "Support · OpenMail",
+    `<article class="prose"><h1>Support</h1>
+<p>OpenMail is an independent open-source project. For help, email <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>. Please write from your OpenMail login address if your question is about your account. For bugs and feature requests, open an issue on <a href="https://github.com/webumer/openmail/issues" rel="noopener">GitHub</a>.</p>
+<p>Found a security problem? Please don't open a public issue. Follow <a href="https://github.com/webumer/openmail/blob/main/SECURITY.md" rel="noopener">SECURITY.md</a> or email ${SUPPORT_EMAIL}.</p>
+<h2>Frequently asked questions</h2>
+<h3>How do I connect my assistant?</h3>
+<p>Sign up, add a mailbox on your <a href="/dashboard">dashboard</a>, then add <code>https://mcp.openmail.tools/mcp</code> to your assistant. Assistants that support MCP sign-in (OAuth), such as Claude and ChatGPT, send you to OpenMail to log in and approve read-only access. Assistants that need a fixed header, such as Grok Bot, use an API key from your dashboard.</p>
+<h3>My mailbox won't connect</h3>
+<p>Most providers need IMAP turned on and an <strong>app password</strong> instead of your normal password, especially when two-step sign-in is on. The server must be reachable on the internet over TLS, usually port 993. Use <em>Test connection</em> before saving. OpenMail shows a short reason when sign-in fails.</p>
+<h3>Will my assistant mark emails as read, or send or delete anything?</h3>
+<p>No. OpenMail is read-only. Mailboxes are opened read-only and messages are fetched without setting the read flag, so they stay unread in your mail app. There are no send, delete, move or flag tools.</p>
+<h3>Does OpenMail store my email?</h3>
+<p>No. Messages are fetched from your provider when you ask and passed straight to your assistant. See the <a href="/privacy">privacy policy</a> for exactly what is stored and for how long.</p>
+<h3>How do I disconnect an assistant?</h3>
+<p>On your dashboard, revoke its API key or click <em>Disconnect</em> under Connected apps. It stops working immediately.</p>
+<h3>How do I delete my account?</h3>
+<p>Email ${SUPPORT_EMAIL} from your login address. We delete the account within 30 days, usually much sooner. You can remove any mailbox yourself at any time.</p>
+<h3>Which tools are available?</h3>
+<p>list_accounts, list_folders, search_messages, read_message and read_thread. Inputs, outputs, errors and limits are documented in <a href="https://github.com/webumer/openmail/blob/main/docs/tools.md" rel="noopener">docs/tools.md</a>.</p>
+</article>`,
+    { ...options, path: "/support", description: "Get help with OpenMail: contact, GitHub issues and frequently asked questions." },
   );
 }
 
