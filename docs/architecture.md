@@ -7,7 +7,7 @@ agent  --443/HTTPS-->  OpenMail (/mcp + setup UI)  --993/465/587-->  mailbox pro
                               |
                               +-- SQLite (multi) or config.toml (single)
                               +-- envelope-encrypted mailbox passwords
-                              +-- read-only IMAP tools
+                              +-- read tools, plus SMTP send when enabled
 ```
 
 ## Modes
@@ -28,7 +28,7 @@ Multi-user is the hosted / shared path. Single-user remains for self-hosting one
 | `src/crypto` | Master key load, per-user data-key wrap, mailbox password seal/unseal, API key generation. |
 | `src/services` | Users, sessions' consumers, API keys, mail accounts (user-scoped). |
 | `src/store` | `CredentialStore`: `SqliteCredentialStore` (multi) and `ConfigCredentialStore` (single). |
-| `src/mail` | Presets, TLS policy, IMAP gateway, read-only operations. |
+| `src/mail` | Presets, TLS policy, IMAP and SMTP gateways, read tools, and `send_message`. |
 | `src/tools` | MCP tool registration and zod input schemas. |
 | `src/server` | One HTTP server for `/healthz`, `/mcp`, and (multi) the setup UI. Bearer auth, body limit, per-key rate limit. |
 | `src/web` | Server-rendered landing, signup/login/dashboard, privacy, terms, reviewer guide, CSRF, session cookies, security headers, custom-host guard, static CSS/JS/logo. |
@@ -55,4 +55,4 @@ The production compose file can run GreenMail (`demo-mail`) on an `internal: tru
 
 ## Mail access
 
-Read tools use read-only mailbox locks (`EXAMINE`) and `BODY.PEEK`, so reads do not set `\Seen`. TLS verification stays on. Plain IMAP is allowed only for loopback when `OPENMAIL_ALLOW_INSECURE_LOCALHOST=1` (or `allow_insecure_localhost` in config) — for GreenMail and similar local fixtures, not production providers.
+Read tools use read-only mailbox locks (`EXAMINE`) and `BODY.PEEK`, so reads do not set `\Seen`. The only IMAP write is `APPEND` of a sent copy to the Sent folder, with the `\Seen` flag. TLS verification stays on. Plain IMAP or SMTP is allowed only for loopback when `OPENMAIL_ALLOW_INSECURE_LOCALHOST=1` (or `allow_insecure_localhost` in config) — for GreenMail and similar local fixtures — or for an exact hostname on `OPENMAIL_INSECURE_IMAP_HOSTS` / `OPENMAIL_INSECURE_SMTP_HOSTS`. Production uses that allowlist for `demo-mail` only.

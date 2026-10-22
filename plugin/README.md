@@ -2,11 +2,9 @@
 
 Read and search **any IMAP mailbox** from Grok Bot, Claude, ChatGPT, Cursor, or any MCP client. OpenMail is a hosted, open-source (MIT) remote MCP server at `https://mcp.openmail.tools/mcp`.
 
-- **Provider-agnostic:** works with any IMAP server over TLS. Presets for Migadu, Fastmail, Zoho and iCloud; anything else (Gmail with an app password, self-hosted Dovecot, cPanel hosts) works with manual host settings.
-- **Read-only today:** it never sends, deletes, moves or flags mail, and reading never marks a message as read.
+- **Provider-agnostic:** works with any IMAP and SMTP server over TLS. Presets for Migadu, Fastmail, Zoho, iCloud, and Gmail (App Password). Anything else works with manual host settings.
+- **Read-only by default.** Sending is opt-in per mailbox, and your assistant asks you before every email. Reading never marks a message as read. Nothing deletes, moves, or flags mail.
 - **A connector, not a mail store:** mail is fetched live from your server for each request and is not saved.
-
-> Sending (drafts first, sent only after your explicit approval) is planned, not built.
 
 ## Setup
 

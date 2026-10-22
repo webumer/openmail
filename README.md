@@ -19,10 +19,10 @@ agent  --443/HTTPS-->  https://mcp.openmail.tools/mcp  --993/465/587-->  mailbox
                               |
                               +-- SQLite users / keys / encrypted mailbox passwords
                               +-- setup UI (same origin)
-                              +-- read-only IMAP tools
+                              +-- read tools, and send when you turn it on
 ```
 
-Read tools always open mailboxes read-only (`EXAMINE`) and fetch with `BODY.PEEK`, so a read does not set `\Seen`. TLS verification stays on. Plain IMAP is allowed only for loopback when `OPENMAIL_ALLOW_INSECURE_LOCALHOST=1` (local test servers).
+Read tools always open mailboxes read-only (`EXAMINE`) and fetch with `BODY.PEEK`, so a read does not set `\Seen`. The only IMAP write is appending a copy of a message you sent to the Sent folder. TLS verification stays on. Plain IMAP or SMTP is allowed only for loopback when `OPENMAIL_ALLOW_INSECURE_LOCALHOST=1` (local test servers), or for an exact hostname in `OPENMAIL_INSECURE_IMAP_HOSTS` / `OPENMAIL_INSECURE_SMTP_HOSTS` (the demo mailbox).
 
 ### Provider presets
 
@@ -32,6 +32,7 @@ Read tools always open mailboxes read-only (`EXAMINE`) and fetch with `BODY.PEEK
 | `fastmail` | `imap.fastmail.com:993` TLS | `smtp.fastmail.com:465` TLS |
 | `zoho` | `imap.zoho.com:993` TLS | `smtp.zoho.com:465` TLS |
 | `icloud` | `imap.mail.me.com:993` TLS | `smtp.mail.me.com:587` STARTTLS |
+| `gmail` | `imap.gmail.com:993` TLS | `smtp.gmail.com:465` TLS (App Password). Gmail stores its own Sent copy. |
 | `custom` | host and port from config / form | host and port from config / form |
 
 Zoho EU and IN use `imap.zoho.eu` / `smtp.zoho.eu` and `imap.zoho.in` / `smtp.zoho.in`.
@@ -40,7 +41,8 @@ Zoho EU and IN use `imap.zoho.eu` / `smtp.zoho.eu` and `imap.zoho.in` / `smtp.zo
 
 Results use `{ ok, data, truncated, warnings }`. Failures use `{ ok: false, error: { code, message }, warnings }`.
 
-- `list_accounts` — id, label, email, preset, IMAP host. Never passwords.
+- `list_accounts` — id, label, email, preset, IMAP host, and whether sending is enabled. Never passwords.
+- `send_message` — sends one email over SMTP after the assistant has shown it and the user confirmed. Off unless sending is enabled for that mailbox and allowed for the connection.
 - `list_folders` — path, name, special-use, delimiter, and STATUS counts when available.
 - `search_messages` — newest first, default 20, max 50, opaque base64 cursor.
 - `read_message` — headers, plain text (HTML stripped when needed), 20,000 character cap, attachment metadata without bytes.
@@ -112,13 +114,13 @@ OpenMail accepts two kinds of bearer token on `/mcp`. Both map to the same OpenM
 
 OpenMail is its own authorization server on the same origin, following the [MCP authorization spec](https://modelcontextprotocol.io/specification/draft/basic/authorization):
 
-- `401` from `/mcp` carries `WWW-Authenticate: Bearer resource_metadata="https://mcp.openmail.tools/.well-known/oauth-protected-resource/mcp", scope="mail.read"`.
+- `401` from `/mcp` carries `WWW-Authenticate: Bearer resource_metadata="https://mcp.openmail.tools/.well-known/oauth-protected-resource/mcp", scope="mail.read mail.send"`.
 - Protected Resource Metadata (RFC 9728): `/.well-known/oauth-protected-resource` and `/.well-known/oauth-protected-resource/mcp`. Resource: `https://mcp.openmail.tools/mcp`.
 - Authorization Server Metadata (RFC 8414): `/.well-known/oauth-authorization-server`. Issuer: `https://mcp.openmail.tools`.
 - Client registration: Client ID Metadata Documents (`client_id_metadata_document_supported: true`, public clients with `none`) and Dynamic Client Registration (RFC 7591) at `/oauth/register`.
 - `/oauth/authorize`: authorization code with **PKCE S256 required**, `state`, exact `redirect_uri` matching (https, or http loopback on any port per RFC 8252), `resource` (RFC 8707) bound to the MCP URL, and `iss` in every response (RFC 9207).
 - `/oauth/token`: code exchange and refresh with rotation and reuse detection (reusing a refresh token revokes the whole connection). `/oauth/revoke` (RFC 7009).
-- One scope, `mail.read`, covering all five read-only tools.
+- Scopes: `mail.read` (always) and `mail.send` (only if the user ticks the box on the consent screen). `mail.send` never widens a mailbox that has sending turned off.
 
 Redirect URIs known to work: `https://claude.ai/api/mcp/auth_callback`, Claude Code loopback (`http://localhost:<port>/callback`), ChatGPT (`https://chatgpt.com/connector_platform_oauth_redirect`, via its CIMD document), MCP Inspector (`http://localhost:6274/oauth/callback`). Custom URL schemes (for example `cursor://`) are not accepted yet.
 
