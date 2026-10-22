@@ -74,8 +74,9 @@ async function browserAuthorize(authorizeUrl, label) {
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: form,
   });
-  const loc = new URL(post.headers.get("location"));
-  check(`${label}: redirect carries code, state and iss`, post.status === 303 && !!loc.searchParams.get("code") && loc.searchParams.get("iss") === BASE);
+  const refresh = post.headers.get("refresh") ?? "";
+  const loc = new URL(refresh.replace(/^0; url=/, ""));
+  check(`${label}: return page carries code, state and iss`, post.status === 200 && !post.headers.get("location") && !!loc.searchParams.get("code") && loc.searchParams.get("iss") === BASE);
   return loc;
 }
 

@@ -159,6 +159,10 @@ describe("OAuth 2.1 authorization server", () => {
   ): Promise<URL> {
     const page = await fetchJar(jar, authorizeUrl(params));
     expect(page.status).toBe(200);
+    const csp = page.headers.get("content-security-policy") ?? "";
+    const formAction = /form-action ([^;]+)/.exec(csp)?.[1] ?? "";
+    // 'self' plus exactly the validated callback origin; never a wildcard or a bare scheme.
+    expect(formAction.trim().split(/\s+/)).toEqual(["'self'", new URL(params.redirect_uri as string).origin]);
     const html = await readHtml(page);
     const form = new URLSearchParams();
     for (const match of html.matchAll(/<input type="hidden" name="([^"]+)" value="([^"]*)">/g)) {
@@ -171,8 +175,15 @@ describe("OAuth 2.1 authorization server", () => {
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: form,
     });
-    expect(post.status).toBe(303);
-    return new URL(post.headers.get("location") as string);
+    expect(post.status).toBe(200);
+    const refresh = post.headers.get("refresh") as string;
+    expect(refresh.startsWith("0; url=")).toBe(true);
+    const returnHtml = await post.text();
+    const link = /<a id="return-link" href="([^"]+)">/.exec(returnHtml)?.[1] as string;
+    expect(decodeEntities(link)).toBe(refresh.slice("0; url=".length));
+    // The consent page keeps form-action 'self': the return is a new navigation, not a redirect hop.
+    expect(post.headers.get("location")).toBeNull();
+    return new URL(refresh.slice("0; url=".length));
   }
 
   async function token(form: Record<string, string>, headers: Record<string, string> = {}): Promise<{ status: number; body: Record<string, unknown> }> {

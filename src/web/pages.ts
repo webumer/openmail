@@ -449,6 +449,18 @@ ${copyField("MCP URL", MCP_ENDPOINT, "new-api-url")}
   );
 }
 
+/** Hands the browser back to the OAuth client after consent (see returnToClient). */
+export function returnToClientPage(href: string): string {
+  const safe = escapeHtml(href);
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="refresh" content="0; url='${safe}'">
+<title>Returning to the app · OpenMail</title><link rel="stylesheet" href="/static/style.css"></head>
+<body><main class="container"><div class="card status"><h1>Returning to the app…</h1>
+<p>If nothing happens, <a id="return-link" href="${safe}">continue to the app</a>.</p></div></main></body></html>`;
+}
+
 export function statusPage(title: string, text: string, statusHint?: string): string {
   return layout(
     `${title} · OpenMail`,
