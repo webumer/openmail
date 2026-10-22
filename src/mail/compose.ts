@@ -8,13 +8,15 @@ import { parseMessage, type ParsedMessageContent } from "./parse-message.js";
 export const DEFAULT_MAX_RECIPIENTS = 20;
 export const SUBJECT_MAX = 300;
 export const BODY_MAX = 100_000;
-export const HTML_MAX = 200_000;
 export const FROM_NAME_MAX = 100;
 export const QUOTE_CHAR_CAP = 20_000;
 export const FORWARD_ATTACHMENT_CAP_BYTES = 15 * 1024 * 1024;
+export const FORWARD_ATTACHMENT_MAX = 20;
 export const REFERENCES_CAP = 20;
 
 const CONTROL = /[\u0000-\u001f\u007f]/;
+const CONTENT_TYPE = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/i;
+const LINE_BREAK = /\r\n|\r|\n|\u2028|\u2029/;
 const ADDR_SPEC =
   /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/;
 const RE_PREFIX = /^(?:re|aw|sv)\s*:\s*/i;
@@ -38,6 +40,11 @@ export function assertHeaderText(value: string, label: string): string {
     throw new MailError("invalid_argument", `${label} contains invalid characters`);
   }
   return value;
+}
+
+/** Replace C0, DEL, and Unicode line separators with a space. */
+export function stripControls(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, " ").replace(/[ \t]{2,}/g, " ").trim();
 }
 
 /** One mailbox, no groups, no comments, no header injection. Returns the addr-spec. */
@@ -97,60 +104,81 @@ export function capReferences(existing: readonly string[], messageId: string | n
 
 export function quoteOriginal(dateLabel: string, fromLabel: string, text: string): string {
   const capped = text.length > QUOTE_CHAR_CAP ? text.slice(0, QUOTE_CHAR_CAP) : text;
-  const quoted = capped.split(/\r?\n/).map((line) => `> ${line}`).join("\n");
-  return `\n\nOn ${dateLabel}, ${fromLabel} wrote:\n${quoted}`;
+  const quoted = splitLines(capped).map((line) => `> ${line}`).join("\n");
+  return `\n\nOn ${stripControls(dateLabel)}, ${stripControls(fromLabel)} wrote:\n${quoted}`;
 }
 
 export function forwardOriginal(original: OriginalMail): string {
   const text = original.text.length > QUOTE_CHAR_CAP ? original.text.slice(0, QUOTE_CHAR_CAP) : original.text;
+  const quoted = splitLines(text).map((line) => `> ${line}`).join("\n");
   return [
     "",
     "",
     "---------- Forwarded message ---------",
-    `From: ${original.from.join(", ") || "unknown"}`,
-    `Date: ${original.dateLabel}`,
-    `Subject: ${original.subject ?? ""}`,
-    `To: ${original.to.join(", ")}`,
+    `From: ${stripControls(original.from.join(", ") || "unknown")}`,
+    `Date: ${stripControls(original.dateLabel)}`,
+    `Subject: ${stripControls(original.subject ?? "")}`,
+    `To: ${stripControls(original.to.join(", "))}`,
     "",
-    text,
+    quoted,
   ].join("\n");
 }
 
+/** Caller-supplied recipients only. Nothing is copied from the original message. */
 export function resolveRecipients(input: {
-  mode: "new" | "reply" | "reply_all" | "forward";
-  accountEmail: string;
-  to?: string[];
+  to: string[];
   cc?: string[];
   bcc?: string[];
-  original?: Pick<OriginalMail, "from" | "to" | "cc" | "replyTo">;
   maxRecipients: number;
 }): { to: string[]; cc: string[]; bcc: string[] } {
-  let to = input.to === undefined ? undefined : dedupeAddresses(input.to.map(parseOneAddress));
-  let cc = input.cc === undefined ? undefined : dedupeAddresses(input.cc.map(parseOneAddress));
-  const bcc = input.bcc === undefined ? [] : dedupeAddresses(input.bcc.map(parseOneAddress));
-  if ((input.mode === "reply" || input.mode === "reply_all") && (!to || to.length === 0)) {
-    const source = input.original && input.original.replyTo.length > 0 ? input.original.replyTo : (input.original?.from ?? []);
-    to = dedupeAddresses(source.map(parseOneAddress));
-  }
-  if (input.mode === "reply_all" && cc === undefined && input.original) {
-    const own = input.accountEmail.toLowerCase();
-    const already = new Set((to ?? []).map((address) => address.toLowerCase()));
-    cc = dedupeAddresses(
-      [...input.original.to, ...input.original.cc]
-        .map(parseOneAddress)
-        .filter((address) => address.toLowerCase() !== own && !already.has(address.toLowerCase())),
-    );
-  }
-  const toList = dropSeen(to ?? [], new Set());
-  const ccList = dropSeen(cc ?? [], new Set(toList.map((address) => address.toLowerCase())));
+  const toList = dropSeen(dedupeAddresses(input.to.map(parseOneAddress)), new Set());
+  const ccList = dropSeen(
+    input.cc === undefined ? [] : dedupeAddresses(input.cc.map(parseOneAddress)),
+    new Set(toList.map((address) => address.toLowerCase())),
+  );
   const seen = new Set([...toList, ...ccList].map((address) => address.toLowerCase()));
-  const bccList = dropSeen(bcc, seen);
+  const bccList = dropSeen(input.bcc === undefined ? [] : dedupeAddresses(input.bcc.map(parseOneAddress)), seen);
   const total = toList.length + ccList.length + bccList.length;
-  if (total < 1) throw new MailError("invalid_argument", "Enter at least one recipient");
+  if (toList.length < 1) throw new MailError("invalid_argument", "Enter at least one recipient");
   if (total > input.maxRecipients) {
     throw new MailError("invalid_argument", `A message can have at most ${input.maxRecipients} recipients`);
   }
   return { to: toList, cc: ccList, bcc: bccList };
+}
+
+export function sanitizeAttachmentFilename(filename: string): string {
+  const cleaned = filename.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 200);
+  return cleaned || "attachment";
+}
+
+export function sanitizeContentType(contentType: string): string {
+  const value = contentType.trim();
+  return CONTENT_TYPE.test(value) ? value : "application/octet-stream";
+}
+
+/** Non-inline attachments to reattach, after the size cap, the count cap, and header cleanup. */
+export function takeForwardAttachments(attachments: OriginalMail["attachments"]): {
+  attachments: OriginalMail["attachments"];
+  warnings: string[];
+} {
+  const warnings: string[] = [];
+  const total = attachments.reduce((sum, item) => sum + item.content.length, 0);
+  if (total > FORWARD_ATTACHMENT_CAP_BYTES) {
+    warnings.push("Attachments were left off because they are larger than 15 MB.");
+    return { attachments: [], warnings };
+  }
+  const limited = attachments.length > FORWARD_ATTACHMENT_MAX ? attachments.slice(0, FORWARD_ATTACHMENT_MAX) : attachments;
+  if (limited.length < attachments.length) {
+    warnings.push(`Only the first ${FORWARD_ATTACHMENT_MAX} attachments were forwarded.`);
+  }
+  return {
+    warnings,
+    attachments: limited.map((item) => ({
+      filename: sanitizeAttachmentFilename(item.filename),
+      contentType: sanitizeContentType(item.contentType),
+      content: item.content,
+    })),
+  };
 }
 
 export async function originalFromSource(source: Buffer): Promise<OriginalMail> {
@@ -185,7 +213,6 @@ export async function buildRawMessage(input: {
   bcc: string[];
   subject: string;
   text: string;
-  html?: string;
   inReplyTo?: string;
   references?: string[];
   attachments?: { filename: string; contentType: string; content: Buffer }[];
@@ -200,7 +227,6 @@ export async function buildRawMessage(input: {
     ...(input.bcc.length > 0 ? { bcc: input.bcc } : {}),
     subject: input.subject,
     text: input.text,
-    ...(input.html !== undefined ? { html: input.html } : {}),
     messageId,
     date: new Date(),
     xMailer: "OpenMail",
@@ -226,12 +252,16 @@ function addressesOf(parsed: ParsedMessageContent, field: "from" | "to" | "cc" |
   return parsed.headers[field].map((item) => item.address).filter((address) => address.trim() !== "");
 }
 
-function normalizeMessageId(value: string): string | null {
+export function normalizeMessageId(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed || CONTROL.test(trimmed)) return null;
   const bare = trimmed.replace(/^<|>$/g, "");
   if (!bare || /\s/.test(bare)) return null;
   return `<${bare}>`;
+}
+
+function splitLines(text: string): string[] {
+  return text.split(LINE_BREAK);
 }
 
 function dropSeen(addresses: readonly string[], seen: Set<string>): string[] {

@@ -3,21 +3,22 @@ import type { AccountCredentials, CredentialStore } from "../store/types.js";
 import { sendLimitsFromEnv, type SendLimits, type SendRecorder } from "../services/send-log.js";
 import { MESSAGE_SOURCE_CAP_BYTES } from "./constants.js";
 import {
-  FORWARD_ATTACHMENT_CAP_BYTES,
   BODY_MAX,
   FROM_NAME_MAX,
-  HTML_MAX,
   SUBJECT_MAX,
   assertHeaderText,
   buildRawMessage,
   capReferences,
   forwardOriginal,
   forwardSubject,
+  normalizeMessageId,
   originalFromSource,
   parseOneAddress,
   quoteOriginal,
   replySubject,
   resolveRecipients,
+  stripControls,
+  takeForwardAttachments,
   type OriginalMail,
 } from "./compose.js";
 import type { ImapGateway } from "./imap-gateway.js";
@@ -52,19 +53,18 @@ export interface SendDeps {
 export interface ReplyTarget {
   folder: string;
   uid: number;
-  mode: "reply" | "reply_all" | "forward";
+  mode: "reply" | "forward";
   quote_original: boolean;
   include_attachments: boolean;
 }
 
 export interface SendInput {
   account: string;
-  to?: string[];
+  to: string[];
   cc?: string[];
   bcc?: string[];
   subject?: string;
   body: string;
-  html?: string;
   from_name?: string;
   reply_to?: ReplyTarget;
   user_confirmed: true;
@@ -118,12 +118,11 @@ export async function sendMessage(deps: SendDeps, userId: string, input: SendInp
 
 interface PreparedText {
   accountId: string;
-  to?: string[];
+  to: string[];
   cc?: string[];
   bcc?: string[];
   subject?: string;
   body: string;
-  html?: string;
   fromName?: string;
   replyTo?: ReplyTarget;
 }
@@ -153,36 +152,28 @@ async function deliver(
   try {
     const original = prepared.replyTo ? await loadOriginal(deps, account, prepared.replyTo) : undefined;
     const recipients = resolveRecipients({
-      mode,
-      accountEmail: account.email,
-      ...(prepared.to ? { to: prepared.to } : {}),
+      to: prepared.to,
       ...(prepared.cc ? { cc: prepared.cc } : {}),
       ...(prepared.bcc ? { bcc: prepared.bcc } : {}),
-      ...(original ? { original } : {}),
       maxRecipients: limits.maxRecipients,
     });
     const subject = chooseSubject(prepared.subject, mode, original);
-  let text = prepared.body;
-  if (prepared.replyTo?.quote_original !== false && original && mode !== "forward") {
-    text += quoteOriginal(original.dateLabel, original.from.join(", ") || "unknown", original.text);
-  }
-  if (mode === "forward" && original && prepared.replyTo?.quote_original !== false) {
-    text += forwardOriginal(original);
-  }
-  let attachments: OriginalMail["attachments"] = [];
-  if (mode === "forward" && original && prepared.replyTo?.include_attachments !== false) {
-    const total = original.attachments.reduce((sum, item) => sum + item.content.length, 0);
-    if (total > FORWARD_ATTACHMENT_CAP_BYTES) {
-      warnings.push("Attachments were left off because they are larger than 15 MB.");
-    } else {
-      attachments = original.attachments;
+    let text = prepared.body;
+    if (prepared.replyTo?.quote_original !== false && original && mode !== "forward") {
+      text += quoteOriginal(original.dateLabel, original.from.join(", ") || "unknown", original.text);
     }
-  }
-  const inReplyTo = mode === "reply" || mode === "reply_all" ? (original?.messageId ?? null) : null;
-  const references =
-    original && (mode === "reply" || mode === "reply_all" || mode === "forward")
-      ? capReferences(original.references, original.messageId)
-      : [];
+    if (mode === "forward" && original && prepared.replyTo?.quote_original !== false) {
+      text += forwardOriginal(original);
+    }
+    let attachments: OriginalMail["attachments"] = [];
+    if (mode === "forward" && original && prepared.replyTo?.include_attachments === true) {
+      const forwarded = takeForwardAttachments(original.attachments);
+      attachments = forwarded.attachments;
+      warnings.push(...forwarded.warnings);
+    }
+    const inReplyTo = mode === "reply" && original?.messageId ? normalizeMessageId(original.messageId) : null;
+    const references =
+      original && (mode === "reply" || mode === "forward") ? capReferences(original.references, original.messageId) : [];
     const recipientCount = recipients.to.length + recipients.cc.length + recipients.bcc.length;
     const built = await buildRawMessage({
       accountEmail: account.email,
@@ -192,7 +183,6 @@ async function deliver(
       bcc: recipients.bcc,
       subject,
       text,
-      ...(prepared.html !== undefined ? { html: prepared.html } : {}),
       ...(inReplyTo ? { inReplyTo } : {}),
       ...(references.length > 0 ? { references } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
@@ -226,22 +216,18 @@ async function deliver(
 }
 
 function prepareText(input: SendInput, maxRecipients: number): PreparedText {
-  const supplied = [
-    ...(input.to ?? []),
-    ...(input.cc ?? []),
-    ...(input.bcc ?? []),
-  ];
+  if (!input.to || input.to.length < 1) {
+    throw new MailError("invalid_argument", "Enter at least one recipient");
+  }
+  const supplied = [...input.to, ...(input.cc ?? []), ...(input.bcc ?? [])];
   if (supplied.length > maxRecipients) {
     throw new MailError("invalid_argument", `A message can have at most ${maxRecipients} recipients`);
   }
-  const to = input.to?.map(parseOneAddress);
+  const to = input.to.map(parseOneAddress);
   const cc = input.cc?.map(parseOneAddress);
   const bcc = input.bcc?.map(parseOneAddress);
   if (typeof input.body !== "string" || input.body.length === 0 || input.body.length > BODY_MAX) {
     throw new MailError("invalid_argument", `Body must be 1 to ${BODY_MAX} characters`);
-  }
-  if (input.html !== undefined && (typeof input.html !== "string" || input.html.length > HTML_MAX)) {
-    throw new MailError("invalid_argument", `HTML must be at most ${HTML_MAX} characters`);
   }
   let fromName: string | undefined;
   if (input.from_name !== undefined && input.from_name.trim() !== "") {
@@ -260,12 +246,11 @@ function prepareText(input: SendInput, maxRecipients: number): PreparedText {
   if (!input.reply_to && !subject) throw new MailError("invalid_argument", "Subject is required");
   return {
     accountId: input.account,
-    ...(to ? { to } : {}),
+    to,
     ...(cc ? { cc } : {}),
     ...(bcc ? { bcc } : {}),
     ...(subject ? { subject } : {}),
     body: input.body,
-    ...(input.html !== undefined ? { html: input.html } : {}),
     ...(fromName ? { fromName } : {}),
     ...(input.reply_to ? { replyTo: input.reply_to } : {}),
   };
@@ -279,14 +264,14 @@ async function loadOriginal(deps: SendDeps, account: AccountCredentials, reply: 
 
 function chooseSubject(
   given: string | undefined,
-  mode: "new" | "reply" | "reply_all" | "forward",
+  mode: "new" | "reply" | "forward",
   original: OriginalMail | undefined,
 ): string {
   if (given) return given;
   const base = stripControls(original?.subject ?? "");
-  if (mode === "forward") return forwardSubject(base);
-  if (mode === "reply" || mode === "reply_all") return replySubject(base);
-  throw new MailError("invalid_argument", "Subject is required");
+  const derived = mode === "forward" ? forwardSubject(base) : mode === "reply" ? replySubject(base) : "";
+  if (!derived) throw new MailError("invalid_argument", "Subject is required");
+  return derived.length > SUBJECT_MAX ? derived.slice(0, SUBJECT_MAX) : derived;
 }
 
 async function saveSentCopy(
@@ -338,7 +323,7 @@ function asSendError(err: unknown, account: AccountCredentials): MailError {
 }
 
 function suppliedCount(prepared: PreparedText): number {
-  return (prepared.to?.length ?? 0) + (prepared.cc?.length ?? 0) + (prepared.bcc?.length ?? 0);
+  return prepared.to.length + (prepared.cc?.length ?? 0) + (prepared.bcc?.length ?? 0);
 }
 
 function dashboardUrl(publicUrl: string | undefined): string {
@@ -349,8 +334,4 @@ function dashboardUrl(publicUrl: string | undefined): string {
 function clipLabel(value: string): string {
   const clean = value.replace(/[\u0000-\u001f\u007f]/g, " ").trim();
   return clean.slice(0, 200) || "unknown";
-}
-
-function stripControls(value: string): string {
-  return value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/[ \t]{2,}/g, " ").trim();
 }

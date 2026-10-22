@@ -72,8 +72,9 @@ describe.skipIf(!live)("GreenMail sending", () => {
   it("delivers a reply with threading headers, leaves the original unseen, and saves a seen Sent copy", async () => {
     const result = await sendMessage(sendDeps(), userId, {
       account: accountId,
+      to: ["test@localhost"],
       body: `reply ${run}`,
-      reply_to: { folder: "INBOX", uid: originalUid, mode: "reply", quote_original: true, include_attachments: true },
+      reply_to: { folder: "INBOX", uid: originalUid, mode: "reply", quote_original: true, include_attachments: false },
       user_confirmed: true,
     });
     expect(result.ok).toBe(true);

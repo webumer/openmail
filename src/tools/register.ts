@@ -112,7 +112,7 @@ export function registerMailTools(server: McpServer, deps: MailServerDeps): void
     {
       title: "Read message",
       description: toolDescription(
-        "Read one message by UID without setting the \\Seen flag. HTML is converted to text when there is no text part. The body is capped at 20,000 characters. Attachments are listed without their bytes.",
+        "Read one message by UID without setting the \\Seen flag. Headers include from, to, cc, and reply_to. HTML is converted to text when there is no text part. The body is capped at 20,000 characters. Attachments are listed by name without their bytes.",
       ),
       inputSchema: readMessageInput,
       annotations: { ...READ_ONLY_ANNOTATIONS, title: "Read message" },
@@ -145,12 +145,11 @@ export function registerMailTools(server: McpServer, deps: MailServerDeps): void
       toCallToolResult(
         await sendMessage(deps, userId, {
           account: args.account,
-          ...(args.to ? { to: args.to } : {}),
+          to: args.to,
           ...(args.cc ? { cc: args.cc } : {}),
           ...(args.bcc ? { bcc: args.bcc } : {}),
           ...(args.subject !== undefined ? { subject: args.subject } : {}),
           body: args.body,
-          ...(args.html !== undefined ? { html: args.html } : {}),
           ...(args.from_name !== undefined ? { from_name: args.from_name } : {}),
           ...(args.reply_to
             ? {

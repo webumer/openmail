@@ -3,12 +3,18 @@ import { describe, expect, it } from "vitest";
 import { MailError, toSmtpError } from "../src/errors.js";
 import { resolveHostTarget } from "../src/mail/address-guard.js";
 import {
+  forwardOriginal,
   forwardSubject,
+  normalizeMessageId,
   parseOneAddress,
   quoteOriginal,
   replySubject,
   resolveRecipients,
+  sanitizeAttachmentFilename,
+  sanitizeContentType,
+  takeForwardAttachments,
 } from "../src/mail/compose.js";
+import { sendMessageInput } from "../src/tools/schemas.js";
 import type { ImapGateway } from "../src/mail/imap-gateway.js";
 import { listAccounts } from "../src/mail/operations.js";
 import { findSentFolder, sendMessage, type SendDeps } from "../src/mail/send.js";
@@ -142,37 +148,54 @@ describe("address and header checks", () => {
     expect(harness.sent).toHaveLength(0);
     expect(parseOneAddress("Pat <pat@example.com>")).toBe("pat@example.com");
     const deduped = resolveRecipients({
-      mode: "new",
-      accountEmail: "you@example.com",
       to: ["Pat@Example.com", "pat@example.com"],
       cc: ["pat@example.com"],
       maxRecipients: 20,
     });
     expect(deduped.to.map((item) => item.toLowerCase())).toEqual(["pat@example.com"]);
     expect(deduped.cc).toEqual([]);
+    expect(sendMessageInput.safeParse({ ...baseInput, html: "<p>hidden</p>" }).success).toBe(false);
+    expect(sendMessageInput.safeParse({ ...baseInput, reply_to: { folder: "INBOX", uid: 1, mode: "reply_all" } }).success).toBe(false);
   });
 });
 
 describe("reply and forward", () => {
-  it("does not stack Re:, threads the reply, and drops the mailbox from reply-all", () => {
+  it("does not stack Re:, and does not invent recipients from the original", () => {
     expect(replySubject("Re: Hello")).toBe("Re: Hello");
     expect(replySubject("RE: Aw: Hello")).toBe("Re: Hello");
     expect(forwardSubject("Fwd: Hello")).toBe("Fwd: Hello");
     expect(forwardSubject("Hello")).toBe("Fwd: Hello");
-    const replyAll = resolveRecipients({
-      mode: "reply_all",
-      accountEmail: "you@example.com",
-      original: {
-        from: ["Pat <pat@example.com>"],
-        to: ["you@example.com", "other@example.com"],
-        cc: ["cc@example.com", "pat@example.com"],
-        replyTo: [],
-      },
+    const explicit = resolveRecipients({
+      to: ["pat@example.com"],
+      cc: ["other@example.com"],
       maxRecipients: 20,
     });
-    expect(replyAll.to).toEqual(["pat@example.com"]);
-    expect(replyAll.cc.sort()).toEqual(["cc@example.com", "other@example.com"]);
-    expect(quoteOriginal("Tue", "Pat", "line").startsWith("\n\nOn Tue, Pat wrote:\n> line")).toBe(true);
+    expect(explicit).toEqual({ to: ["pat@example.com"], cc: ["other@example.com"], bcc: [] });
+    expect(() => resolveRecipients({ to: [], maxRecipients: 20 })).toThrow(MailError);
+    const quoted = quoteOriginal("Tue\r\nBcc: x", "Pat\u0000", "line1\rline2\u2028line3\nline4\u2029line5");
+    expect(quoted).toContain("On Tue Bcc: x, Pat wrote:");
+    expect(quoted).not.toMatch(/\r|\u2028|\u2029/);
+    for (const line of ["line1", "line2", "line3", "line4", "line5"]) expect(quoted).toContain(`> ${line}`);
+    const forwarded = forwardOriginal({
+      subject: "hi\r\nBcc: evil@example.com",
+      from: ["Ann\u2028Smith"],
+      to: ["pat@example.com"],
+      cc: [],
+      replyTo: [],
+      dateLabel: "Tue\r\nBcc: y",
+      messageId: "<bad\r\nid@example.com>",
+      references: [],
+      text: "body\u2028injected",
+      attachments: [],
+    });
+    expect(forwarded).not.toMatch(/\r|\u2028|\u2029/);
+    expect(forwarded).toContain("Subject: hi Bcc: evil@example.com");
+    expect(forwarded).toContain("From: Ann Smith");
+    expect(forwarded).toContain("Date: Tue Bcc: y");
+    expect(forwarded).toContain("> body");
+    expect(forwarded).toContain("> injected");
+    expect(normalizeMessageId("<id@example.com>")).toBe("<id@example.com>");
+    expect(normalizeMessageId("<id\r\nBcc: evil@example.com>")).toBeNull();
   });
 
   it("sends a threaded reply and a forward without marking the original seen", async () => {
@@ -217,10 +240,22 @@ describe("reply and forward", () => {
         },
       },
     });
+    const omitted = await sendMessage(harness.deps, "user", {
+      account: account.id,
+      to: [],
+      body: "Thanks",
+      reply_to: { folder: "INBOX", uid: 4, mode: "reply", quote_original: true, include_attachments: false },
+      user_confirmed: true,
+    });
+    expect(omitted.ok).toBe(false);
+    if (!omitted.ok) expect(omitted.error.code).toBe("invalid_argument");
+    expect(harness.sent).toHaveLength(0);
+
     const reply = await sendMessage(harness.deps, "user", {
       account: account.id,
+      to: ["pat@example.com"],
       body: "Thanks",
-      reply_to: { folder: "INBOX", uid: 4, mode: "reply", quote_original: true, include_attachments: true },
+      reply_to: { folder: "INBOX", uid: 4, mode: "reply", quote_original: true, include_attachments: false },
       user_confirmed: true,
     });
     expect(examined).toBe(true);
@@ -232,6 +267,9 @@ describe("reply and forward", () => {
     expect(parsed.references).toContain("<orig@example.com>");
     const toText = Array.isArray(parsed.to) ? parsed.to.map((item) => item.text).join(",") : (parsed.to?.text ?? "");
     expect(toText).toContain("pat@example.com");
+    expect(toText).not.toContain("other@example.com");
+    expect(parsed.cc).toBeUndefined();
+    expect(parsed.html).toBe(false);
     expect(parsed.text).toContain("Thanks");
     expect(parsed.text).toContain("> Original body");
 
@@ -248,6 +286,105 @@ describe("reply and forward", () => {
     expect(fwd.subject).toBe("Fwd: Re: Hello");
     expect(fwd.inReplyTo).toBeUndefined();
     expect(fwd.text).toContain("Forwarded message");
+    expect(fwd.attachments).toHaveLength(0);
+  });
+
+  it("caps a derived subject, drops a dirty message id, and sanitizes forwarded files", async () => {
+    const long = "S".repeat(400);
+    const dirtyId = "=?utf-8?q?=3Corig=40example.com=3E=0D=0ABcc=3A_evil=40example.com?=";
+    const filename = `=?utf-8?q?note=0D=0Aevil.pdf?=`;
+    const source = Buffer.from(
+      [
+        "From: Pat <pat@example.com>",
+        "To: you@example.com",
+        `Subject: ${long}`,
+        `Message-ID: ${dirtyId}`,
+        "Date: Tue, 1 Jan 2026 00:00:00 +0000",
+        "MIME-Version: 1.0",
+        'Content-Type: multipart/mixed; boundary="b"',
+        "",
+        "--b",
+        "Content-Type: text/plain; charset=utf-8",
+        "",
+        "Original body",
+        "--b",
+        "Content-Type: not a type",
+        `Content-Disposition: attachment; filename="${filename}"`,
+        "",
+        "file-bytes",
+        "--b--",
+        "",
+      ].join("\r\n"),
+    );
+    const harness = deps({
+      imap: {
+        async withClient(_account, fn) {
+          return fn(session());
+        },
+        async withMailbox(_account, _folder, fn) {
+          return fn({
+            ...session([]),
+            fetchOne: async () => ({
+              uid: 4,
+              source,
+              flags: [],
+              size: source.length,
+              envelope: null,
+              bodyStructure: null,
+              internalDate: null,
+              headers: null,
+            }),
+          });
+        },
+        async appendMessage() {
+          return undefined;
+        },
+      },
+    });
+    const reply = await sendMessage(harness.deps, "user", {
+      account: account.id,
+      to: ["pat@example.com"],
+      body: "Thanks",
+      reply_to: { folder: "INBOX", uid: 4, mode: "reply", quote_original: false, include_attachments: true },
+      user_confirmed: true,
+    });
+    expect(reply.ok).toBe(true);
+    if (reply.ok) {
+      expect(reply.data.subject.length).toBeLessThanOrEqual(300);
+      expect(reply.data.subject.startsWith("Re: ")).toBe(true);
+      expect(reply.data.in_reply_to).toBeNull();
+    }
+    const parsed = await simpleParser(harness.sent[0]?.raw ?? Buffer.alloc(0));
+    expect(parsed.subject?.length).toBeLessThanOrEqual(300);
+    expect(parsed.inReplyTo).toBeUndefined();
+
+    harness.sent.length = 0;
+    const forwarded = await sendMessage(harness.deps, "user", {
+      account: account.id,
+      to: ["new@example.com"],
+      body: "FYI",
+      reply_to: { folder: "INBOX", uid: 4, mode: "forward", quote_original: false, include_attachments: true },
+      user_confirmed: true,
+    });
+    expect(forwarded.ok).toBe(true);
+    const fwd = await simpleParser(harness.sent[0]?.raw ?? Buffer.alloc(0));
+    const raw = harness.sent[0]?.raw.toString("utf8") ?? "";
+    expect(raw).toContain("filename=noteevil.pdf");
+    expect(raw).toContain("Content-Type: application/octet-stream");
+    expect(raw).not.toContain("not a type");
+    expect(sanitizeContentType("not a type")).toBe("application/octet-stream");
+    expect(sanitizeAttachmentFilename(`note\r\n${"a".repeat(250)}`)).toHaveLength(200);
+    expect(sanitizeAttachmentFilename("\r\n")).toBe("attachment");
+    const many = Array.from({ length: 21 }, (_, i) => ({
+      filename: `f${i}.txt`,
+      contentType: "text/plain",
+      content: Buffer.from("x"),
+    }));
+    const taken = takeForwardAttachments(many);
+    expect(taken.attachments).toHaveLength(20);
+    expect(taken.warnings.join(" ")).toContain("20");
+    const huge = takeForwardAttachments([{ filename: "big.bin", contentType: "application/octet-stream", content: Buffer.alloc(15 * 1024 * 1024 + 1) }]);
+    expect(huge.attachments).toHaveLength(0);
   });
 });
 
