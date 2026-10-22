@@ -144,8 +144,11 @@ interface RefreshRow {
   expires_at: string;
   rotated_at: string | null;
   revoked_at: string | null;
+  /** Scope stored on this refresh token. NULL for tokens issued before the column. */
+  token_scope: string | null;
   client_id: string;
-  scope: string;
+  /** Grant scope. Ceiling for a refresh that asks for a narrower or equal scope. */
+  grant_scope: string;
   resource: string;
   grant_revoked: string | null;
 }
@@ -162,8 +165,8 @@ export function refreshGrant(
   const run = db.transaction((): IssuedTokens | OAuthError => {
     const row = db
       .prepare(
-        `SELECT t.token_hash, t.grant_id, t.expires_at, t.rotated_at, t.revoked_at,
-                g.client_id, g.scope, g.resource, g.revoked_at AS grant_revoked
+        `SELECT t.token_hash, t.grant_id, t.expires_at, t.rotated_at, t.revoked_at, t.scope AS token_scope,
+                g.client_id, g.scope AS grant_scope, g.resource, g.revoked_at AS grant_revoked
          FROM oauth_tokens t JOIN oauth_grants g ON g.id = t.grant_id
          WHERE t.token_hash = ? AND t.kind = 'refresh'`,
       )
@@ -179,9 +182,12 @@ export function refreshGrant(
     if (input.resource !== undefined && input.resource !== row.resource) {
       return new OAuthError("invalid_target", "resource does not match the original grant");
     }
-    let scope = row.scope;
+    // No scope parameter keeps this refresh token's scope. A token from before
+    // the column existed (NULL) keeps the grant. A requested scope must be a
+    // subset of the grant, which stays the ceiling and is not narrowed.
+    let scope = row.token_scope ?? row.grant_scope;
     if (input.scope !== undefined) {
-      const granted = new Set(row.scope.split(" "));
+      const granted = new Set(row.grant_scope.split(" "));
       const requested = input.scope.split(" ").filter(Boolean);
       if (!requested.every((s) => granted.has(s))) return new OAuthError("invalid_scope", "Requested scope exceeds the grant");
       scope = requested.join(" ");
@@ -211,11 +217,25 @@ function issueTokens(db: Database, grantId: string, scope: string, now: number):
     `UPDATE oauth_tokens SET revoked_at = ? WHERE grant_id = ? AND kind = 'access' AND revoked_at IS NULL`,
   ).run(stamp, grantId);
   const insert = db.prepare(
-    `INSERT INTO oauth_tokens (token_hash, grant_id, kind, created_at, expires_at, rotated_at, revoked_at)
-     VALUES (?, ?, ?, ?, ?, NULL, NULL)`,
+    `INSERT INTO oauth_tokens (token_hash, grant_id, kind, created_at, expires_at, rotated_at, revoked_at, scope)
+     VALUES (?, ?, ?, ?, ?, NULL, NULL, ?)`,
   );
-  insert.run(sha256Hex(accessToken), grantId, "access", stamp, new Date(now + ACCESS_TOKEN_TTL_SECONDS * 1000).toISOString());
-  insert.run(sha256Hex(refreshToken), grantId, "refresh", stamp, new Date(now + REFRESH_TOKEN_TTL_SECONDS * 1000).toISOString());
+  insert.run(
+    sha256Hex(accessToken),
+    grantId,
+    "access",
+    stamp,
+    new Date(now + ACCESS_TOKEN_TTL_SECONDS * 1000).toISOString(),
+    scope,
+  );
+  insert.run(
+    sha256Hex(refreshToken),
+    grantId,
+    "refresh",
+    stamp,
+    new Date(now + REFRESH_TOKEN_TTL_SECONDS * 1000).toISOString(),
+    scope,
+  );
   return { accessToken, refreshToken, expiresIn: ACCESS_TOKEN_TTL_SECONDS, scope, grantId };
 }
 
@@ -229,7 +249,7 @@ export function resolveAccessToken(
   if (!token.startsWith(ACCESS_TOKEN_PREFIX) || token.length > 200) return null;
   const row = db
     .prepare(
-      `SELECT t.expires_at, t.revoked_at, g.id AS grant_id, g.user_id, g.scope, g.resource, g.client_name, g.revoked_at AS grant_revoked, g.last_used_at
+      `SELECT t.expires_at, t.revoked_at, t.scope AS token_scope, g.id AS grant_id, g.user_id, g.scope AS grant_scope, g.resource, g.client_name, g.revoked_at AS grant_revoked, g.last_used_at
        FROM oauth_tokens t JOIN oauth_grants g ON g.id = t.grant_id
        WHERE t.token_hash = ? AND t.kind = 'access'`,
     )
@@ -237,9 +257,10 @@ export function resolveAccessToken(
     | {
         expires_at: string;
         revoked_at: string | null;
+        token_scope: string | null;
         grant_id: string;
         user_id: string;
-        scope: string;
+        grant_scope: string;
         client_name: string;
         resource: string;
         grant_revoked: string | null;
@@ -249,11 +270,12 @@ export function resolveAccessToken(
   if (!row || row.revoked_at || row.grant_revoked) return null;
   if (Date.parse(row.expires_at) <= now) return null;
   if (row.resource !== resource) return null;
-  if (!row.scope.split(" ").includes(MAIL_READ_SCOPE)) return null;
+  const scope = row.token_scope ?? row.grant_scope;
+  if (!scope.split(" ").includes(MAIL_READ_SCOPE)) return null;
   if (!row.last_used_at || now - Date.parse(row.last_used_at) >= GRANT_TOUCH_INTERVAL_MS) {
     db.prepare("UPDATE oauth_grants SET last_used_at = ? WHERE id = ?").run(new Date(now).toISOString(), row.grant_id);
   }
-  return { userId: row.user_id, grantId: row.grant_id, scope: row.scope, clientName: row.client_name };
+  return { userId: row.user_id, grantId: row.grant_id, scope, clientName: row.client_name };
 }
 
 /**

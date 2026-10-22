@@ -382,11 +382,13 @@ describe("OAuth 2.1 authorization server", () => {
 
     expect(await listAccounts(access)).toEqual({ ok: true, names: ["Ada Work"] });
 
-    // Refresh rotates both tokens.
+    // Refresh rotates both tokens and keeps a read-only grant read-only.
     const refreshed = await token({ grant_type: "refresh_token", client_id: clientId, refresh_token: refresh });
     expect(refreshed.status).toBe(200);
+    expect(refreshed.body.scope).toBe("mail.read");
     const access2 = refreshed.body.access_token as string;
     const refresh2 = refreshed.body.refresh_token as string;
+    expect(authenticateDatabaseKey(db, `Bearer ${access2}`, config.resource)?.canSend).toBe(false);
     expect(refresh2).not.toBe(refresh);
     expect((await listAccounts(access2)).ok).toBe(true);
     // The previous access token is retired by the rotation.
@@ -875,6 +877,76 @@ describe("OAuth 2.1 authorization server", () => {
     const principal = authenticateDatabaseKey(db, `Bearer ${withSend.body.access_token as string}`, config.resource);
     expect(principal?.canSend).toBe(true);
     expect(principal?.via.startsWith("oauth:")).toBe(true);
+
+    const issuedScopes = db.prepare(
+      "SELECT kind FROM oauth_tokens WHERE scope = 'mail.read mail.send' ORDER BY kind",
+    ).all() as { kind: string }[];
+    expect(issuedScopes.map((row) => row.kind)).toEqual(["access", "refresh"]);
+  });
+
+  it("narrows mail.send on refresh and keeps that scope when scope is omitted", async () => {
+    const client = await register();
+    const clientId = client.client_id as string;
+    const jar = new CookieJar();
+    await signup(jar, "narrow@example.com");
+    const { verifier, challenge } = pkce();
+    const params = standardParams(clientId, challenge, { scope: "mail.read mail.send" });
+    const allowed = await consent(jar, params, "allow", { allow_send: "on" });
+    const issued = await token({
+      grant_type: "authorization_code",
+      client_id: clientId,
+      code: allowed.searchParams.get("code") as string,
+      redirect_uri: REDIRECT,
+      code_verifier: verifier,
+      resource: config.resource,
+    });
+    expect(issued.body.scope).toBe("mail.read mail.send");
+    const access = issued.body.access_token as string;
+    expect(authenticateDatabaseKey(db, `Bearer ${access}`, config.resource)?.canSend).toBe(true);
+
+    // A token from before the scope column (NULL) still uses the grant.
+    db.prepare("UPDATE oauth_tokens SET scope = NULL WHERE kind = 'access' AND revoked_at IS NULL").run();
+    expect(authenticateDatabaseKey(db, `Bearer ${access}`, config.resource)?.canSend).toBe(true);
+
+    const narrowed = await token({
+      grant_type: "refresh_token",
+      client_id: clientId,
+      refresh_token: issued.body.refresh_token as string,
+      scope: "mail.read",
+    });
+    expect(narrowed.status).toBe(200);
+    expect(narrowed.body.scope).toBe("mail.read");
+    const narrowedAccess = narrowed.body.access_token as string;
+    expect(authenticateDatabaseKey(db, `Bearer ${narrowedAccess}`, config.resource)?.canSend).toBe(false);
+
+    const kept = await token({
+      grant_type: "refresh_token",
+      client_id: clientId,
+      refresh_token: narrowed.body.refresh_token as string,
+    });
+    expect(kept.status).toBe(200);
+    expect(kept.body.scope).toBe("mail.read");
+    expect(authenticateDatabaseKey(db, `Bearer ${kept.body.access_token as string}`, config.resource)?.canSend).toBe(false);
+
+    const widened = await token({
+      grant_type: "refresh_token",
+      client_id: clientId,
+      refresh_token: kept.body.refresh_token as string,
+      scope: "mail.read mail.send",
+    });
+    expect(widened.status).toBe(200);
+    expect(widened.body.scope).toBe("mail.read mail.send");
+    expect(authenticateDatabaseKey(db, `Bearer ${widened.body.access_token as string}`, config.resource)?.canSend).toBe(true);
+
+    // NULL on the refresh token itself falls back to the grant when scope is omitted.
+    db.prepare("UPDATE oauth_tokens SET scope = NULL WHERE kind = 'refresh' AND revoked_at IS NULL AND rotated_at IS NULL").run();
+    const fromGrant = await token({
+      grant_type: "refresh_token",
+      client_id: clientId,
+      refresh_token: widened.body.refresh_token as string,
+    });
+    expect(fromGrant.body.scope).toBe("mail.read mail.send");
+    expect(authenticateDatabaseKey(db, `Bearer ${fromGrant.body.access_token as string}`, config.resource)?.canSend).toBe(true);
   });
 });
 

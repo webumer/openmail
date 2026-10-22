@@ -29,4 +29,8 @@ CREATE TABLE send_log (
 
 CREATE INDEX send_log_user_created ON send_log (user_id, created_at);
 CREATE INDEX send_log_account_created ON send_log (account_id, created_at);
+
+-- Scope actually issued on this access or refresh token. NULL on tokens
+-- created before the column existed; those still authorize from the grant.
+ALTER TABLE oauth_tokens ADD COLUMN scope TEXT;
 `;

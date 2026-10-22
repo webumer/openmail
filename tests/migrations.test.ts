@@ -56,6 +56,16 @@ describe("migrations", () => {
       "revoked_at",
       "can_send",
     ]);
+    expect(columnNames(db, "oauth_tokens")).toEqual([
+      "token_hash",
+      "grant_id",
+      "kind",
+      "created_at",
+      "expires_at",
+      "rotated_at",
+      "revoked_at",
+      "scope",
+    ]);
     expect(columnNames(db, "mail_accounts")).toEqual([
       "id",
       "user_id",
@@ -115,6 +125,11 @@ describe("migrations", () => {
     const key = db.prepare("SELECT can_send FROM api_keys WHERE id = ?").get("key-1") as { can_send: number };
     expect(account).toEqual({ send_enabled: 0, smtp_username: null });
     expect(key.can_send).toBe(0);
+    const scope = (db.prepare("PRAGMA table_info(oauth_tokens)").all() as { name: string; notnull: number }[]).find(
+      (column) => column.name === "scope",
+    );
+    expect(scope?.name).toBe("scope");
+    expect(scope?.notnull).toBe(0);
   });
 
   it("creates the parent directory for a file database and enforces foreign keys", () => {
