@@ -226,7 +226,6 @@ pre code { background: none; padding: 0; }
 .footer-links { display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; }
 .footer-links a { color: var(--ink-soft); text-decoration: none; }
 .footer-links a:hover { color: var(--brand); text-decoration: underline; }
-.soon { color: var(--muted); }
 .copyright { margin: 0; grid-column: 1 / -1; }
 
 /* App pages */

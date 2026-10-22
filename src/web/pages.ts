@@ -70,7 +70,7 @@ ${body}
 <footer class="site-footer"><div class="container footer-inner">
 <div class="footer-brand"><a class="brand" href="/">${LOGO_MARK}<span>OpenMail</span></a><p>Email for AI assistants. Read-only, any IMAP provider.</p></div>
 <nav class="footer-links" aria-label="Footer">
-<a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/reviewers">Reviewers</a><span class="soon" title="The source code will be published soon">GitHub (coming soon)</span><a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>
+<a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/reviewers">Reviewers</a><a href="https://github.com/webumer/openmail" rel="noopener">GitHub</a><a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>
 </nav>
 <p class="copyright">© 2026 OpenMail</p>
 </div></footer>
@@ -120,7 +120,7 @@ export function homePage(input: { email: string | null; csrf?: string; notice?: 
     ["key", "Hashed, revocable keys", "API keys are stored only as SHA-256 hashes. Revoke one and it stops working at once."],
     ["shield", "TLS always verified", "Connections to mail servers use TLS with certificate checks that cannot be switched off."],
     ["chat", "Email is untrusted content", "Tool results tell the assistant that email text is data, never instructions to follow."],
-    ["code", "MIT licensed", "OpenMail is MIT-licensed software. The source code will be published soon."],
+    ["code", "MIT licensed", "OpenMail is MIT-licensed software. The source code is <a href=\"https://github.com/webumer/openmail\" rel=\"noopener\">on GitHub</a>."],
   ];
   const faq: Array<[string, string]> = [
     ["Is my mail stored?", "No. OpenMail fetches messages from your provider when your assistant asks and does not keep them. It stores only your account details, encrypted mailbox passwords and hashed API keys. See the <a href=\"/privacy\">privacy policy</a>."],
@@ -128,7 +128,7 @@ export function homePage(input: { email: string | null; csrf?: string; notice?: 
     ["Which providers work?", "Any mailbox with IMAP access. Migadu, Fastmail, Zoho and iCloud have presets; for anything else, enter your IMAP server with TLS on port 993 (or STARTTLS on 143). Use an app-specific password where your provider offers one."],
     ["How do I revoke access?", "Open your dashboard and revoke the API key, or remove the mailbox. Both take effect immediately."],
     ["Is it free?", "Yes, OpenMail is free while in beta."],
-    ["Can I self-host?", "Yes, OpenMail runs as a single Docker Compose stack. Self-hosting docs will be on GitHub when the source is published, which is coming soon."],
+    ["Can I self-host?", "Yes, OpenMail runs as a single Docker Compose stack. See the <a href=\"https://github.com/webumer/openmail/blob/main/docs/deploy.md\" rel=\"noopener\">deploy guide on GitHub</a>."],
   ];
   return layout(
     "OpenMail: connect any email inbox to your AI assistant",
