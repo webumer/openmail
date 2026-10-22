@@ -24,6 +24,7 @@ import { ConfigCredentialStore, SqliteCredentialStore } from "../src/store/index
 import type { CredentialStore } from "../src/store/types.js";
 import { parseConfig } from "../src/config/index.js";
 import { readMessageInput, searchMessagesInput } from "../src/tools/schemas.js";
+import { toMailError } from "../src/errors.js";
 import { PERMISSIONS_POLICY } from "../src/web/headers.js";
 import { RecordingSession, account, fetched, textMail } from "./fixtures.js";
 
@@ -131,6 +132,18 @@ describe("message size limits", () => {
     expect(readMessageInput.safeParse({ account: "a", folder: "INBOX", uid: 2 ** 33 }).success).toBe(false);
     expect(searchMessagesInput.safeParse({ account: "a", text: "y".repeat(501) }).success).toBe(false);
     expect(searchMessagesInput.safeParse({ account: "a", text: "invoice" }).success).toBe(true);
+  });
+});
+
+describe("IMAP error messages", () => {
+  it("does not echo host, port or syscall text", () => {
+    expect(toMailError(new Error("connect ECONNREFUSED 10.0.0.5:993")).message).toBe("Could not reach the IMAP server");
+    expect(toMailError(new Error("Hostname/IP does not match certificate's altnames: Host: x")).message).toBe(
+      "TLS verification failed for the IMAP server",
+    );
+    const scrubbed = toMailError(new Error("fetch failed secret-value"), "secret-value");
+    expect(scrubbed.message).toBe("IMAP request failed");
+    expect(scrubbed.message).not.toContain("secret");
   });
 });
 
