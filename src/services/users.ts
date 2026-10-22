@@ -96,6 +96,27 @@ export async function verifyPassword(
 }
 
 /**
+ * Replaces a user's login password and signs out every web session.
+ * API keys are not touched, so connected assistants keep working.
+ */
+export async function setPassword(
+  db: Database,
+  input: { email: string; password: string },
+): Promise<{ id: string; sessions: number }> {
+  const email = parseEmail(input.email);
+  const password = requireUserPassword(input.password);
+  const passwordHash = await hash(password, ARGON_OPTIONS);
+  const run = db.transaction(() => {
+    const row = db.prepare("SELECT id FROM users WHERE email = ?").get(email) as { id: string } | undefined;
+    if (!row) throw new MailError("not_found", "User was not found");
+    db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(passwordHash, row.id);
+    const sessions = db.prepare("DELETE FROM sessions WHERE user_id = ?").run(row.id).changes;
+    return { id: row.id, sessions };
+  });
+  return run();
+}
+
+/**
  * Deletes a user and everything that belongs to them: sessions, API keys
  * (so their bearer tokens stop working at once) and mail accounts with
  * their encrypted passwords. The wrapped data key goes with the row.

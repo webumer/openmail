@@ -40,7 +40,7 @@
 
 ## Operator CLI
 
-`node dist/cli/admin.js` (inside the container: `docker compose exec -T openmail node dist/cli/admin.js …`). Passwords and keys are read from stdin or `--password-env VAR`, never from argv, and the CLI prints only ids, names and counts. `delete-user --email <e> --yes` removes a user with their sessions, keys and mailboxes.
+`node dist/cli/admin.js` (inside the container: `docker compose exec -T openmail node dist/cli/admin.js …`). Passwords and keys are read from stdin or `--password-env VAR`, never from argv, and the CLI prints only ids, names and counts. `delete-user --email <e> --yes` removes a user with their sessions, keys and mailboxes. `set-password --email <e>` (new password on stdin) replaces a login password and signs out that user's web sessions; API keys keep working.
 
 ## Proxy
 

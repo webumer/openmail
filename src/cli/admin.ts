@@ -21,6 +21,7 @@ export const USAGE = `Usage: admin <command> [options]
 
   list-users
   create-user   --email <login email>                       password on stdin
+  set-password  --email <login email>                       new password on stdin; signs out web sessions, keeps API keys
   list-accounts --user <login email>
   add-account   --user <login email> --name <name> --email <mailbox address>
                 --preset <migadu|fastmail|zoho|icloud> [--username <u>] [--zoho-region <com|eu|in>]
@@ -94,6 +95,13 @@ export async function runAdmin(argv: readonly string[], deps: AdminDeps, io: Adm
       const password = await io.readSecret();
       const user = await users.create(deps.db, deps.masterKey, { email: text("email"), password });
       io.out(`created user ${user.email} ${user.id}`);
+      return;
+    }
+    case "set-password": {
+      const password = await io.readSecret();
+      const email = text("email");
+      const changed = await users.setPassword(deps.db, { email, password });
+      io.out(`password updated for ${email.toLowerCase()} ${changed.id} (sessions signed out=${changed.sessions})`);
       return;
     }
     case "list-accounts": {

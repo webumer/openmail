@@ -105,4 +105,29 @@ describe("admin CLI", () => {
     expect(t.probes.at(-1)?.imap).toEqual({ host: "demo-mail", port: 3143, secure: false });
     expect(t.probes.at(-1)?.insecureImapHosts).toEqual(["demo-mail"]);
   });
+
+  it("sets a new login password, signs out sessions, keeps API keys, never prints it", async () => {
+    const t = setup();
+    const deps = { db: t.db, masterKey: t.masterKey, imap: t.imap };
+    const NEW_SECRET = "a-brand-new-login-pass-123";
+    await runAdmin(["create-user", "--email", "owner@example.com"], deps, t.io(LOGIN_SECRET));
+    await runAdmin(["import-key", "--user", "owner@example.com", "--name", "grok"], deps, t.io(LEGACY_KEY));
+    const user = t.db.prepare("SELECT id FROM users WHERE email = ?").get("owner@example.com") as { id: string };
+    const now = new Date();
+    t.db
+      .prepare("INSERT INTO sessions (id, user_id, csrf_secret, created_at, expires_at) VALUES (?, ?, ?, ?, ?)")
+      .run("s1", user.id, "c", now.toISOString(), new Date(now.getTime() + 3_600_000).toISOString());
+
+    await runAdmin(["set-password", "--email", "Owner@Example.com"], deps, t.io(NEW_SECRET));
+    expect(await users.verifyPassword(t.db, { email: "owner@example.com", password: NEW_SECRET })).not.toBeNull();
+    expect(await users.verifyPassword(t.db, { email: "owner@example.com", password: LOGIN_SECRET })).toBeNull();
+    expect((t.db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE user_id = ?").get(user.id) as { n: number }).n).toBe(0);
+    expect(apiKeys.resolve(t.db, LEGACY_KEY)).not.toBeNull();
+    expect(t.lines.join("\n")).not.toContain(NEW_SECRET);
+    expect(t.lines.join("\n")).toContain("sessions signed out=1");
+
+    await expect(runAdmin(["set-password", "--email", "nobody@example.com"], deps, t.io(NEW_SECRET))).rejects.toThrow(/not found/);
+    await expect(runAdmin(["set-password", "--email", "owner@example.com"], deps, t.io("short"))).rejects.toThrow();
+    expect(await users.verifyPassword(t.db, { email: "owner@example.com", password: NEW_SECRET })).not.toBeNull();
+  });
 });
