@@ -65,7 +65,7 @@ async function browserAuthorize(authorizeUrl, label) {
   const csp = res.headers.get("content-security-policy") ?? "";
   check(`${label}: consent CSP frame-ancestors none + callback form-action`, csp.includes("frame-ancestors 'none'") && /form-action 'self' \S+/.test(csp));
   const html = await res.text();
-  check(`${label}: consent text`, html.includes("wants read-only access to your OpenMail mailboxes"));
+  check(`${label}: consent text`, html.includes("wants read-only access to your OpenMail mailboxes") || (html.includes("wants access to your OpenMail mailboxes") && /<form[^>]*action="\/oauth\/authorize"[\s\S]*name="allow_send"(?![^>]*checked)[\s\S]*<\/form>/.test(html)));
   const form = new URLSearchParams();
   for (const m of html.matchAll(/<input type="hidden" name="([^"]+)" value="([^"]*)">/g)) form.set(m[1], decode(m[2]));
   form.set("decision", "allow");
@@ -115,7 +115,7 @@ const asm = await (await fetch(`${BASE}/.well-known/oauth-authorization-server`)
 check("ASM issuer, S256, CIMD, iss, none", asm.issuer === BASE && asm.code_challenge_methods_supported?.includes("S256") && asm.client_id_metadata_document_supported === true && asm.authorization_response_iss_parameter_supported === true && asm.token_endpoint_auth_methods_supported?.includes("none"));
 const unauth = await fetch(MCP, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
 const www = unauth.headers.get("www-authenticate") ?? "";
-check("/mcp 401 with resource_metadata + scope", unauth.status === 401 && www.includes(`resource_metadata="${BASE}/.well-known/oauth-protected-resource/mcp"`) && www.includes('scope="mail.read"'));
+check("/mcp 401 with resource_metadata + scope", unauth.status === 401 && www.includes(`resource_metadata="${BASE}/.well-known/oauth-protected-resource/mcp"`) && /scope="mail\.read( mail\.send)?"/.test(www));
 
 // 2. SDK client: discovery → DCR → PKCE authorize → token → tools
 const redirectUrl = "http://localhost:6274/oauth/callback";
@@ -149,8 +149,11 @@ check("SDK: token exchange", typeof saved?.access_token === "string" && saved.ac
 const sdkClient = new Client({ name: "openmail-live-check", version: "1" });
 await sdkClient.connect(new StreamableHTTPClientTransport(new URL(MCP), { authProvider: provider }));
 const tools = await sdkClient.listTools();
-check("tools/list returns 5 tools", tools.tools.length === 5, tools.tools.map((t) => t.name).join(","));
-check("annotations readOnly/!destructive/!openWorld + title", tools.tools.every((t) => t.annotations?.readOnlyHint === true && t.annotations?.destructiveHint === false && t.annotations?.openWorldHint === false && (t.title || t.annotations?.title)));
+check("tools/list returns 6 tools", tools.tools.length === 6, tools.tools.map((t) => t.name).join(","));
+const readTools = tools.tools.filter((t) => t.name !== "send_message");
+const sendTool = tools.tools.find((t) => t.name === "send_message");
+check("read tools readOnly/!destructive/!openWorld + title", readTools.length === 5 && readTools.every((t) => t.annotations?.readOnlyHint === true && t.annotations?.destructiveHint === false && t.annotations?.openWorldHint === false && (t.title || t.annotations?.title)));
+check("send_message !readOnly/destructive/openWorld + title", !!sendTool && sendTool.annotations?.readOnlyHint === false && sendTool.annotations?.destructiveHint === true && sendTool.annotations?.openWorldHint === true && !!(sendTool.title || sendTool.annotations?.title));
 const accounts = data(await sdkClient.callTool({ name: "list_accounts", arguments: {} })) ?? [];
 const demo = accounts.find((a) => /demo/i.test(`${a.label} ${a.email}`)) ?? accounts[0];
 check("list_accounts shows the Demo mailbox", !!demo, demo ? `${demo.id} ${demo.email}` : "none");
