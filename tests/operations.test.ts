@@ -1,4 +1,4 @@
-import { MESSAGE_SOURCE_CAP_BYTES } from "../src/mail/constants.js";
+import { ADDRESS_SCAN_CAP, MESSAGE_SOURCE_CAP_BYTES } from "../src/mail/constants.js";
 import { describe, expect, it } from "vitest";
 import { MailError } from "../src/errors.js";
 import { UNTRUSTED_CONTENT_WARNING } from "../src/mail/constants.js";
@@ -179,6 +179,47 @@ describe("read-only mail operations", () => {
     expect(none.ok && none.data.messages).toEqual([]);
   });
 
+  it("keeps the other filters server-side, fetches only envelopes, pages, and flags a capped scan", async () => {
+    const { deps, session } = harness();
+    const total = ADDRESS_SCAN_CAP + 5;
+    session.search = async (query) => {
+      session.searches.push(query);
+      return query.from ? [] : Array.from({ length: total }, (_, i) => i + 1);
+    };
+    for (let uid = 1; uid <= total; uid += 1) {
+      const priya = uid === 1 || uid === total || uid === total - 1 || uid === total - 2;
+      session.messages.set(uid, fetched({
+        uid,
+        envelope: uid === total - 3 ? null : { subject: `s${uid}`, from: [{ name: priya ? "Priya Raman" : "Someone", address: priya ? "priya@acme.example" : "x@other.example" }] },
+        bodyStructure: { type: "text/plain" },
+      }));
+    }
+    const first = await searchMessages(deps, "user-1", "work", {
+      from: "priya", unread: true, since: "2026-01-01", before: "2026-12-31", text: "venue", subject: "offsite", limit: 2,
+    });
+    const second = session.searches[1]!;
+    expect(second).toMatchObject({ seen: false, text: "venue", subject: "offsite" });
+    expect(second.since).toBeInstanceOf(Date);
+    expect(second.before).toBeInstanceOf(Date);
+    expect(second.from).toBeUndefined();
+    expect(session.fetches[0]).toEqual({ envelope: true });
+    expect(first.ok && first.data.messages.map((m) => m.uid)).toEqual([total, total - 1]);
+    // Stopped after a page plus one match: only the first chunk of envelopes was fetched.
+    expect(session.fetches.filter((f) => f.envelope && Object.keys(f).length === 1)).toHaveLength(1);
+    expect(first.ok && first.truncated).toBe(false);
+    const cursor = first.ok ? first.data.next_cursor : null;
+    expect(cursor).toBeTruthy();
+    const next = await searchMessages(deps, "user-1", "work", { from: "priya", limit: 2, cursor: cursor ?? "" });
+    // uid 1 is older than the newest ADDRESS_SCAN_CAP candidates after the cursor, so it is not reached.
+    expect(next.ok && next.data.messages.map((m) => m.uid)).toEqual([total - 2]);
+    expect(next.ok && next.data.next_cursor).toBeNull();
+    expect(next.ok && next.truncated).toBe(true);
+    expect(next.warnings.some((w) => w.includes(`newest ${ADDRESS_SCAN_CAP} messages`))).toBe(true);
+    const withAttachment = await searchMessages(deps, "user-1", "work", { from: "PRIYA@acme", has_attachment: false, limit: 50 });
+    expect(withAttachment.ok && withAttachment.data.messages.map((m) => m.uid)).toEqual([total, total - 1, total - 2]);
+    expect(withAttachment.ok && withAttachment.truncated).toBe(true);
+  });
+
   it("does not rescan when the server's FROM search already matched", async () => {
     const { deps, session } = harness();
     session.searchUids = [5];
@@ -277,7 +318,7 @@ describe("read-only mail operations", () => {
     const result = await readMessage(deps, "user-1", "work", "INBOX", 2);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.truncated).toBe(true);
+    expect(result.ok && result.truncated).toBe(true);
     expect(result.data.text).toHaveLength(20_000);
     expect(result.warnings.some((warning) => warning.includes("20000"))).toBe(true);
   });
@@ -325,7 +366,7 @@ describe("read-only mail operations", () => {
     const result = await readThread(deps, "user-1", "work", "INBOX", 1);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.truncated).toBe(true);
+    expect(result.ok && result.truncated).toBe(true);
     expect(result.data.messages[0]?.text).toHaveLength(20_000);
     expect(result.data.messages[1]?.text).toHaveLength(19_998);
     expect(result.data.messages[2]?.text).toBe("");

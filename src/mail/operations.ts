@@ -216,8 +216,11 @@ export async function searchMessages(
     return deps.imap.withMailbox(account, folder, async (session) => {
       const warnings = [UNTRUSTED_CONTENT_WARNING];
       let uids = uniquePositive(await session.search(query));
+      let truncated = false;
       if (uids.length === 0 && (hasText(params.from) || hasText(params.to))) {
-        uids = await addressFallback(session, params, warnings);
+        const fallback = await addressFallback(session, params, limit, cursor, warnings);
+        uids = fallback.uids;
+        truncated = fallback.capped;
       }
       const { page, hasMore, scanCapped } = await collectPage(session, uids, params.has_attachment, limit, cursor);
       if (scanCapped) {
@@ -230,7 +233,7 @@ export async function searchMessages(
           messages: page.map((message) => toSearchHit(message, folder)),
           next_cursor: nextCursor(cursor, page, hasMore),
         },
-        { warnings },
+        { truncated, warnings },
       );
     });
   });
@@ -385,45 +388,56 @@ function hasText(value: string | undefined): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-/** Case-insensitive substring match on display name and address, like RFC 3501 FROM/TO. */
+/** Case-insensitive substring of the display name or the address, like RFC 3501 FROM/TO. */
 export function addressMatches(list: readonly EnvelopeAddress[] | undefined, term: string): boolean {
   const needle = term.trim().toLowerCase();
-  return (list ?? []).some((entry) =>
-    [entry.name ?? "", entry.address ?? "", `${entry.name ?? ""} <${entry.address ?? ""}>`].some((value) =>
-      value.toLowerCase().includes(needle),
-    ),
+  if (needle.length === 0) return false;
+  return (list ?? []).some(
+    (entry) => (entry.name ?? "").toLowerCase().includes(needle) || (entry.address ?? "").toLowerCase().includes(needle),
   );
 }
 
 /**
- * Some servers (GreenMail, for one) match FROM/TO only against the full address, so "priya" or a
+ * Some servers (GreenMail, for one) match FROM/TO only against a full address, so "priya" or a
  * display name finds nothing. When FROM/TO returned no UIDs, rerun the search without them and
- * match the envelopes of the newest ADDRESS_SCAN_CAP candidates here instead.
+ * match the envelopes of at most ADDRESS_SCAN_CAP candidates (newest first, after the cursor)
+ * here instead. Only ENVELOPE is fetched, which never sets \Seen. Stops early once a page plus one
+ * is found, unless has_attachment still has to filter the matches.
  */
-async function addressFallback(session: ImapSession, params: SearchParams, warnings: string[]): Promise<number[]> {
+async function addressFallback(
+  session: ImapSession,
+  params: SearchParams,
+  limit: number,
+  cursor: CursorPayload | null,
+  warnings: string[],
+): Promise<{ uids: number[]; capped: boolean }> {
   const rest = uniquePositive(await session.search(buildSearchQuery({ ...params, from: undefined, to: undefined })));
-  if (rest.length === 0) return [];
-  const scan = sortNewest(rest).slice(0, ADDRESS_SCAN_CAP);
+  const ordered = sortNewest(rest).filter((uid) => cursor?.uid == null || uid < cursor.uid);
+  const scan = ordered.slice(0, ADDRESS_SCAN_CAP);
+  const enough = params.has_attachment === undefined ? limit + 1 : Number.POSITIVE_INFINITY;
   const matched: number[] = [];
   const chunkSize = 200;
-  for (let index = 0; index < scan.length; index += chunkSize) {
-    const fetched = await session.fetchAll(scan.slice(index, index + chunkSize), ADDRESS_FETCH);
-    for (const message of fetched) {
-      const envelope = message.envelope;
+  for (let index = 0; index < scan.length && matched.length < enough; index += chunkSize) {
+    const chunk = scan.slice(index, index + chunkSize);
+    const byUid = new Map((await session.fetchAll(chunk, ADDRESS_FETCH)).map((message) => [message.uid, message]));
+    for (const uid of chunk) {
+      const envelope = byUid.get(uid)?.envelope;
       if (!envelope) continue;
       if (hasText(params.from) && !addressMatches(envelope.from, params.from)) continue;
       if (hasText(params.to) && !addressMatches(envelope.to, params.to)) continue;
-      matched.push(message.uid);
+      matched.push(uid);
+      if (matched.length >= enough) break;
     }
   }
-  if (matched.length > 0 || rest.length > scan.length) {
+  const capped = matched.length < enough && ordered.length > scan.length;
+  if (capped) {
     warnings.push(
-      rest.length > scan.length
-        ? `The mail server's from/to search found nothing, so OpenMail matched names and addresses in the newest ${ADDRESS_SCAN_CAP} messages itself; narrow the search (for example with since/before) to check older ones.`
-        : "The mail server's from/to search found nothing, so OpenMail matched names and addresses itself.",
+      `The mail server's from/to search found nothing, so OpenMail matched names and addresses in the newest ${ADDRESS_SCAN_CAP} messages itself; older messages were not checked. Narrow the search (for example with since/before) to check them.`,
     );
+  } else if (matched.length > 0) {
+    warnings.push("The mail server's from/to search found nothing, so OpenMail matched names and addresses itself.");
   }
-  return matched;
+  return { uids: matched, capped };
 }
 
 async function collectPage(

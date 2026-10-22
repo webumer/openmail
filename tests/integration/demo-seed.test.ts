@@ -76,8 +76,8 @@ describe.skipIf(!live)("demo mailbox seeding", () => {
       const priya = await searchMessages(d, "u", "demo", filters);
       expect(priya.ok && priya.data.messages.map((m) => m.subject)).toEqual(["Q4 planning offsite: date and venue"]);
     }
-    const toDemo = await searchMessages(d, "u", "demo", { to: "demo", subject: "offsite" });
-    expect(toDemo.ok && toDemo.data.messages.length).toBeGreaterThan(0);
+    const toDemo = await searchMessages(d, "u", "demo", { to: "demo", from: "priya", subject: "offsite" });
+    expect(toDemo.ok && toDemo.data.messages.map((m) => m.subject)).toEqual(["Q4 planning offsite: date and venue"]);
     const nobody = await searchMessages(d, "u", "demo", { from: "nobody-here", subject: "offsite" });
     expect(nobody.ok && nobody.data.messages).toEqual([]);
 
