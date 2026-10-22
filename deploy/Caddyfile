@@ -9,10 +9,17 @@
 		# MCP streamable HTTP uses SSE; send bytes as soon as they arrive.
 		flush_interval -1
 	}
+	# Access logs are kept 14 days (stated in the privacy policy): rolled daily
+	# at midnight UTC, rolled files deleted after 14 days.
+	# Caddy redacts Authorization and Cookie headers in access logs by default.
 	log {
-		output stdout
-		format console
-		# Caddy redacts Authorization and Cookie headers in access logs by default.
+		output file /data/logs/access.log {
+			roll_size 50MiB
+			roll_at 00:00
+			roll_keep 14
+			roll_keep_for 336h
+		}
+		format json
 	}
 }
 
