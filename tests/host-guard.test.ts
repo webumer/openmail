@@ -19,7 +19,7 @@ describe("custom host guard", () => {
     expect(await checkCustomHost({ ...base, host: "imap.example.com", port: 993 }, resolver({ "imap.example.com": ["93.184.216.34"] }))).toBeNull();
     expect(await checkCustomHost({ ...base, host: "evil.example", port: 993 }, resolver({ "evil.example": ["93.184.216.34", "10.0.0.5"] }))).toContain("public");
     expect(await checkCustomHost({ ...base, host: "openmail", port: 993 }, resolver({ openmail: ["172.18.0.3"] }))).toContain("public");
-    expect(await checkCustomHost({ ...base, host: "nowhere.example", port: 993 }, resolver({}))).toContain("resolved");
+    expect(await checkCustomHost({ ...base, host: "nowhere.example", port: 993 }, resolver({}))).toContain("public internet");
     expect(await checkCustomHost({ ...base, host: "1.1.1.1", port: 8080 }, resolver({}))).toContain("port");
     expect(await checkCustomHost({ ...base, host: "localhost", port: 13143 }, resolver({}))).toContain("port");
     expect(await checkCustomHost({ ...base, host: "localhost", port: 13143, allowInsecureLocalhost: true }, resolver({}))).toBeNull();

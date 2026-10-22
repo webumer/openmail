@@ -33,7 +33,7 @@ describe("imap gateway", () => {
     expect(result).toMatchObject({ ok: false, error: { code: "imap_error" } });
     if (result.ok) return;
     expect(result.error.message).not.toContain(SECRET);
-    expect(result.error.message).toContain("[redacted]");
+    expect(result.error.message).toBe("IMAP request failed");
     expect(client.lockReleased).toBe(true);
     expect(client.loggedOut).toBe(true);
   });

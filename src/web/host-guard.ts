@@ -27,15 +27,15 @@ export async function checkCustomHost(
   if (!allowedPorts.includes(input.port)) {
     return `${input.kind} port must be one of ${allowedPorts.join(", ")}`;
   }
+  // One message for "bad host" so an attacker cannot tell NXDOMAIN from
+  // "resolved to a private address" (which would map internal Docker names).
+  const refused = `${input.kind} host must be a public internet address`;
   let addresses: string[];
   try {
     addresses = isIP(host) ? [host] : await resolve(host);
   } catch {
-    return `${input.kind} host could not be resolved`;
+    return refused;
   }
-  if (addresses.length === 0) return `${input.kind} host could not be resolved`;
-  if (addresses.some(isPrivateAddress)) {
-    return `${input.kind} host must be a public internet address`;
-  }
+  if (addresses.length === 0 || addresses.some(isPrivateAddress)) return refused;
   return null;
 }
