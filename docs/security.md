@@ -18,7 +18,7 @@
 - CSRF on every POST: session secret in a hidden `_csrf` field after login; double-submit `om_csrf` cookie for signup/login.
 - Login and signup rate-limited per IP and per email (10 attempts / 15 minutes by default) → `429`.
 - Account passwords: minimum 10 characters for user accounts; zod validation with friendly form errors; password fields are never re-filled.
-- Adding a mail account always probes IMAP first; save only on success. "Test connection" and "Save" share a per-user limit (20 sign-in attempts / 15 minutes) → `429`.
+- Adding a mail account always probes IMAP first; save only on success. "Test connection", "Save", and turning on "Allow sending" (which checks SMTP first) share a per-user limit (20 sign-in attempts / 15 minutes) → `429`.
 - Custom hosts must resolve only to public addresses (no loopback, private, link-local, CGNAT, multicast or documentation ranges, IPv4 or IPv6) and use standard ports (IMAP 143/993, SMTP 465/587/2525). This stops the probe being used to scan the server's own network. Presets skip this form check because their hosts are fixed. Plain SMTP is refused except for loopback in local tests or an exact hostname in `OPENMAIL_INSECURE_SMTP_HOSTS` (the hosted demo uses `demo-mail` only). TLS certificate checks cannot be turned off.
 - Every IMAP connection (probe, MCP tool, CLI) resolves the host again, refuses it if any address is private, and connects to the checked IP while TLS still verifies the certificate against the original hostname. A hostname that is re-pointed at `127.0.0.1` or `169.254.169.254` after it was saved (DNS rebinding) is refused with `blocked_host`. Only operator-trusted hosts skip this: loopback with `OPENMAIL_ALLOW_INSECURE_LOCALHOST=1`, and exact names on `OPENMAIL_INSECURE_IMAP_HOSTS`.
 - Per-user caps: 25 mail accounts and 25 active API keys.
@@ -35,8 +35,15 @@
 - Consent shows the app name (marked unverified for DCR), the full CIMD document URL, and the exact `redirect_uri`, with a warning when it is a loopback address. Token-endpoint errors use one `invalid_grant` description per grant type.
 - Login: an unauthenticated authorize request goes to `/login?next=…`. `next` is accepted only if it is a path to `/oauth/authorize` on this site, so it cannot become an open redirect.
 - Consent: CSRF token tied to the session, `frame-ancestors 'none'` and `X-Frame-Options: DENY`. The page CSP adds only the callback's origin to `form-action` (browsers apply it to the redirect after the form post). App names are stripped of control and bidi characters and HTML-escaped; DCR names are labelled as unverified; the callback host is always shown; loopback-only apps get an extra warning.
-- Tokens: random 256-bit values with prefixes (`omc_` code, `oma_` access, `omr_` refresh), stored as SHA-256. Code: 5 minutes, single use, bound to client, redirect URI, PKCE challenge and resource; reuse revokes tokens issued from it. Access: 1 hour; a refresh retires the previous access token. Refresh: 30 days, rotated on each use; presenting a rotated one revokes the grant. Revoking a refresh token (RFC 7009) or disconnecting in the dashboard revokes the whole grant.
+- Tokens: random 256-bit values with prefixes (`omc_` code, `oma_` access, `omr_` refresh), stored as SHA-256. Code: 5 minutes, single use, bound to client, redirect URI, PKCE challenge and resource; reuse revokes tokens issued from it. Access: 1 hour; a refresh retires the previous access token. Each token stores the scope it was issued: a refresh can drop `mail.send`, and omitting `scope` keeps the previous refresh token's scope (or the grant's, for a token from before that column). The grant scope stays the ceiling. Refresh: 30 days, rotated on each use; presenting a rotated one revokes the grant. Revoking a refresh token (RFC 7009) or disconnecting in the dashboard revokes the whole grant.
 - `/mcp` validates OAuth tokens for expiry, revocation, audience (`resource`) and the `mail.read` scope, then applies the same per-user isolation as API keys.
+
+## Sending
+
+- `send_message` sends plain text only. Every recipient is an address the caller passes. A reply does not copy Reply-To, From, To, or Cc from the original; `read_message` returns those headers so they can be shown and then passed explicitly. A reply-all is a reply plus the Cc the user approved.
+- Forwarded files are included only when `include_attachments` is true, after the file names have been shown. At most 20 files and 15 MB. Filenames and content types taken from the original are sanitized.
+- The send log stores time, mailbox label, recipient count, status, message id, and which connection sent it. It does not store the body, subject, or addresses. Rows are kept 90 days. An attempt still in progress is listed as "in progress" and counts toward the limit; one left unfinished for more than 5 minutes is marked interrupted at startup and still counts.
+- In single-user config mode the send log and the rate limits are in memory only and reset when the process exits.
 
 ## MCP
 

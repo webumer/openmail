@@ -42,7 +42,7 @@ Zoho EU and IN use `imap.zoho.eu` / `smtp.zoho.eu` and `imap.zoho.in` / `smtp.zo
 Results use `{ ok, data, truncated, warnings }`. Failures use `{ ok: false, error: { code, message }, warnings }`.
 
 - `list_accounts` — id, label, email, preset, IMAP host, and whether sending is enabled. Never passwords.
-- `send_message` — sends one email over SMTP after the assistant has shown it and the user confirmed. Off unless sending is enabled for that mailbox and allowed for the connection.
+- `send_message` — sends one plain-text email over SMTP after the assistant has shown it and the user confirmed. Every recipient is passed explicitly. Off unless sending is enabled for that mailbox and allowed for the connection.
 - `list_folders` — path, name, special-use, delimiter, and STATUS counts when available.
 - `search_messages` — newest first, default 20, max 50, opaque base64 cursor.
 - `read_message` — headers, plain text (HTML stripped when needed), 20,000 character cap, attachment metadata without bytes.
@@ -98,6 +98,8 @@ npm start
 ```
 
 `OPENMAIL_CONFIG` selects the config file (default `./config.toml`). `config.toml` is gitignored; `config.example.toml` has placeholders only.
+
+In single-user mode the send log and the send rate limits are kept in memory only. They reset when the process exits. Multi-user mode stores them in SQLite.
 
 ## Two ways to connect
 

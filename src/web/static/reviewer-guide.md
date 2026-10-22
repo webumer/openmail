@@ -52,7 +52,7 @@ Read tools: `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: tru
 | `search_messages` | Search messages | Read |
 | `read_message` | Read message | Read |
 | `read_thread` | Read thread | Read |
-| `send_message` | Send email | Write. The demo mailbox can send; mail stays on the isolated demo server. |
+| `send_message` | Send email | Write. Plain text, and only the recipients passed in. The demo mailbox can send; mail stays on the isolated demo server. |
 
 ## What it does not do
 It does not delete, move, flag, or mark mail as read. It does not send from a mailbox where sending is off, or through a connection that was not allowed to send. Mail content is not stored. Email content is returned marked as untrusted third-party content.

@@ -81,7 +81,7 @@ export function demoMessages(): DemoMessage[] {
       subject: "Welcome to the OpenMail demo mailbox",
       ageMinutes: 6 * DAY,
       seen: true,
-      text: "Hi there,\n\nThis mailbox contains a handful of fictional messages so you can try OpenMail's read-only tools: list folders, search, read a message and read a thread.\n\nNothing here is real, and nothing you do through OpenMail can change it: the tools are read-only.\n\nThe OpenMail demo",
+      text: "Hi there,\n\nThis mailbox contains a handful of fictional messages so you can try OpenMail: list folders, search, read a message, read a thread, and send a reply.\n\nNothing here is real. The read tools never change this mailbox. The demo can also send replies, which only reach an isolated demo mail server, never the internet.\n\nThe OpenMail demo",
     },
     {
       key: "newsletter-weekly-byte",

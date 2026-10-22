@@ -31,7 +31,7 @@ Only the latest release on `main`, which is what runs at https://mcp.openmail.to
 | Mailbox settings (host, port, username, address, name) | Plain text |
 | Mailbox passwords | AES-256-GCM, with a per-user data key that is itself wrapped by the server master key (envelope encryption, ids bound as AAD) |
 | Optional SMTP password | Same encryption, with a different binding (`account id` + `:smtp`) so it cannot be swapped with the IMAP password |
-| Send log | Time, mailbox label, recipient count, status, message id, and which connection sent it. No body, subject, or addresses. Kept 90 days. |
+| Send log | Time, mailbox label, recipient count, status, message id, and which connection sent it. No body, subject, or addresses. Kept 90 days in multi-user mode. In single-user config mode the send log and the rate limits are in memory only and reset when the process exits. |
 | Email content | **Not stored.** Messages are fetched from your IMAP server on each request and passed back to your assistant. |
 
 Logs contain no message content, passwords or keys.

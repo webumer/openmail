@@ -34,6 +34,7 @@ Read and search **any IMAP mailbox** from Grok Bot, Claude, ChatGPT, Cursor, or 
 | `search_messages` | Searches a folder by `from`, `to`, `subject`, `text`, `since`, `before`, `unread`, `has_attachment`. Newest first, paged (default 20, max 50 per page). |
 | `read_message` | Reads one message: headers, text body (capped at 20,000 characters) and an attachment list (names, types, sizes; no file bytes). Does **not** mark it as read. |
 | `read_thread` | Reads the conversation a message belongs to (up to 100 messages, 40,000 characters total). |
+| `send_message` | Sends one plain-text email after you have seen the recipients, subject, and body and said to send it. Every recipient is passed explicitly. Off unless sending is turned on for that mailbox. |
 
 Example prompts:
 
