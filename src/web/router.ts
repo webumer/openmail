@@ -645,6 +645,10 @@ async function submitSending(req: IncomingMessage, res: ServerResponse, handler:
     writeDashboard(res, handler, session, { draft: emptyAccountDraft(), errors: ["That mailbox was not found."] }, 404);
     return;
   }
+  if (!handler.probeAttempts.allow(`probe:${session.userId}`)) {
+    limited(res);
+    return;
+  }
   try {
     await handler.smtp.verify(account);
   } catch (err) {

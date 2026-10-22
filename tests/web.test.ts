@@ -6,8 +6,9 @@ import type Database from "better-sqlite3";
 import { generateTestMasterKey, loadMasterKey } from "../src/crypto/index.js";
 import { migrate, openDatabase } from "../src/db/index.js";
 import type { ImapGateway } from "../src/mail/imap-gateway.js";
-import { createSmtpGateway } from "../src/mail/smtp-gateway.js";
+import { createSmtpGateway, type SmtpGateway } from "../src/mail/smtp-gateway.js";
 import { createMemorySendRecorder } from "../src/services/send-log.js";
+import { mailAccounts } from "../src/services/index.js";
 import { CONTENT_SECURITY_POLICY, HSTS_VALUE, createWebHandler } from "../src/web/index.js";
 import { authenticateDatabaseKey, createOpenMailServer } from "../src/server/index.js";
 import { SqliteCredentialStore } from "../src/store/index.js";
@@ -288,7 +289,78 @@ describe("web setup app", () => {
     expect(limited.status).toBe(429);
   });
 
-  async function start(options?: { authLimit?: number; probeLimit?: number }): Promise<string> {
+  it("shows an in-progress send and rate limits turning sending on", async () => {
+    let verifies = 0;
+    const smtp: SmtpGateway = {
+      async send() {
+        return { messageId: "m" };
+      },
+      async verify() {
+        verifies += 1;
+      },
+    };
+    const base = await start({ probeLimit: 1, smtp });
+    const jar = new CookieJar();
+    await signup(jar, base, "send-limit@example.com", PASSWORD);
+    const user = db?.prepare("SELECT id FROM users WHERE email = ?").get("send-limit@example.com") as { id: string };
+    const added = mailAccounts.add(db as NonNullable<typeof db>, master, {
+      userId: user.id,
+      name: "Work",
+      email: "ada@example.com",
+      preset: "migadu",
+      password: "mailbox-secret",
+    });
+    db?.prepare(
+      `INSERT INTO send_log (
+         id, user_id, account_id, account_label, created_at, status, recipients, message_id, error_code, via
+       ) VALUES (?, ?, ?, ?, ?, 'failed', 1, NULL, 'in_progress', 'api_key:Laptop')`,
+    ).run("send-1", user.id, added.id, "Work", "2026-10-22T12:00:00.000Z");
+    const dash = await fetchJar(jar, `${base}/dashboard`);
+    const html = await readHtml(dash);
+    expect(html).toContain("Status</span> in progress");
+
+    const off = await fetchJar(jar, `${base}/accounts/${added.id}/sending`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ _csrf: csrfFromHtml(html), enabled: "0" }),
+    });
+    expect(off.status).toBe(303);
+    expect(verifies).toBe(0);
+
+    const probed = await fetchJar(jar, `${base}/accounts/test`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        _csrf: csrfFromHtml(await readHtml(await fetchJar(jar, `${base}/dashboard`))),
+        name: "Probe",
+        email: "ada@example.com",
+        username: "",
+        password: "mailbox-secret-value",
+        preset: "custom",
+        zoho_region: "",
+        imap_host: "10.1.2.3",
+        imap_port: "993",
+        imap_secure: "on",
+        smtp_host: "203.0.113.9",
+        smtp_port: "465",
+        smtp_secure: "on",
+        smtp_starttls: "",
+      }),
+    });
+    expect(probed.status).toBe(400);
+    const enabled = await fetchJar(jar, `${base}/accounts/${added.id}/sending`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        _csrf: csrfFromHtml(await readHtml(await fetchJar(jar, `${base}/dashboard`))),
+        enabled: "1",
+      }),
+    });
+    expect(enabled.status).toBe(429);
+    expect(verifies).toBe(0);
+  });
+
+  async function start(options?: { authLimit?: number; probeLimit?: number; smtp?: SmtpGateway }): Promise<string> {
     master = loadMasterKey(generateTestMasterKey());
     db = openDatabase(":memory:");
     migrate(db);
@@ -296,7 +368,7 @@ describe("web setup app", () => {
       db,
       masterKey: master,
       imap,
-      smtp: createSmtpGateway(),
+      smtp: options?.smtp ?? createSmtpGateway(),
       publicUrl: PUBLIC_URL,
       trustProxy: false,
       allowInsecureLocalhost: false,
