@@ -1,4 +1,5 @@
 import type { ApiKeySummary, MailAccountSummary } from "../services/index.js";
+import type { GrantSummary } from "../oauth/grants.js";
 import { PROVIDER_PRESETS, ZOHO_REGIONS } from "../mail/presets.js";
 import type { AccountDraft } from "./forms.js";
 import { escapeHtml } from "./html.js";
@@ -117,16 +118,17 @@ export function homePage(input: { email: string | null; csrf?: string; notice?: 
     ["check", "Never marks mail as read", "Messages are opened read-only and fetched with BODY.PEEK, so unread stays unread."],
     ["server", "No email stored", "Messages are fetched from your provider on request and passed straight to your assistant."],
     ["lock", "Encrypted passwords", "Mailbox passwords are encrypted with AES-256-GCM using a key unique to your account."],
-    ["key", "Hashed, revocable keys", "API keys are stored only as SHA-256 hashes. Revoke one and it stops working at once."],
+    ["key", "Hashed, revocable access", "API keys and sign-in tokens are stored only as SHA-256 hashes. Revoke a key or disconnect an app and it stops working at once."],
     ["shield", "TLS always verified", "Connections to mail servers use TLS with certificate checks that cannot be switched off."],
     ["chat", "Email is untrusted content", "Tool results tell the assistant that email text is data, never instructions to follow."],
     ["code", "MIT licensed", "OpenMail is MIT-licensed software. The source code is <a href=\"https://github.com/webumer/openmail\" rel=\"noopener\">on GitHub</a>."],
   ];
   const faq: Array<[string, string]> = [
-    ["Is my mail stored?", "No. OpenMail fetches messages from your provider when your assistant asks and does not keep them. It stores only your account details, encrypted mailbox passwords and hashed API keys. See the <a href=\"/privacy\">privacy policy</a>."],
+    ["Is my mail stored?", "No. OpenMail fetches messages from your provider when your assistant asks and does not keep them. It stores only your account details, encrypted mailbox passwords, and hashed API keys and sign-in tokens. See the <a href=\"/privacy\">privacy policy</a>."],
     ["Can it send or delete email?", "No. Today OpenMail is read-only: no sending, deleting, moving or flagging. Sending is planned, as drafts that go out only after you approve them."],
     ["Which providers work?", "Any mailbox with IMAP access. Migadu, Fastmail, Zoho and iCloud have presets; for anything else, enter your IMAP server with TLS on port 993 (or STARTTLS on 143). Use an app-specific password where your provider offers one."],
-    ["How do I revoke access?", "Open your dashboard and revoke the API key, or remove the mailbox. Both take effect immediately."],
+    ["Which assistants can I use?", "Any assistant that supports remote MCP servers. Clients that support MCP sign-in (OAuth), such as Claude custom connectors, Claude Code, ChatGPT and MCP Inspector, only need the URL: you log in to OpenMail and approve read-only access. Grok Bot and clients that send a fixed header use an API key from your dashboard."],
+    ["How do I revoke access?", "Open your dashboard and disconnect the app under Connected apps, revoke the API key, or remove the mailbox. Each takes effect immediately."],
     ["Is it free?", "Yes, OpenMail is free while in beta."],
     ["Can I self-host?", "Yes, OpenMail runs as a single Docker Compose stack. See the <a href=\"https://github.com/webumer/openmail/blob/main/docs/deploy.md\" rel=\"noopener\">deploy guide on GitHub</a>."],
   ];
@@ -159,26 +161,39 @@ export function homePage(input: { email: string | null; csrf?: string; notice?: 
 <ol class="steps">
 <li class="card step">${icon("user")}<h3>Create an account</h3><p>Sign up with an email and password. No credit card.</p></li>
 <li class="card step">${icon("inbox")}<h3>Add your mailboxes</h3><p>Pick a preset or enter any IMAP server. OpenMail tests the connection before saving, then encrypts the password.</p></li>
-<li class="card step">${icon("key")}<h3>Connect Grok Bot</h3><p>Create an API key in your dashboard and add OpenMail as a connector in Grok Bot.</p></li>
+<li class="card step">${icon("key")}<h3>Connect your assistant</h3><p>Add the OpenMail URL and sign in to approve read-only access, or use an API key for Grok Bot.</p></li>
 </ol>
 </div></section>
 
 <section id="connect" class="section section-tint"><div class="container narrow">
-<h2 class="section-title">Connect to Grok Bot</h2>
+<h2 class="section-title">Connect your assistant</h2>
+<p class="section-lead">First <a href="/signup">sign up</a> and add a mailbox. Then pick the option your assistant supports.</p>
+<h3>Option 1: Sign in with OpenMail (Claude, ChatGPT and other MCP clients with sign-in)</h3>
 <ol class="guide-steps">
-<li><a href="/signup">Sign up</a>, add a mailbox, then create an API key on your dashboard. Copy it: it is shown only once.</li>
-<li>In Grok Bot, install OpenMail from the connector list, or add a custom MCP connector (streamable HTTP) with:</li>
+<li>In your assistant, add a custom or remote MCP connector with just this URL. No key or header needed.</li>
+</ol>
+<div class="copy-block">
+${copyField("MCP URL", MCP_ENDPOINT, "copy-oauth-url")}
+</div>
+<ol class="guide-steps" start="2">
+<li>Your assistant opens OpenMail. Log in, check the list of mailboxes, and click <strong>Allow</strong> to grant read-only access.</li>
+<li>Disconnect it any time under <strong>Connected apps</strong> on your dashboard.</li>
+</ol>
+<h3>Option 2: API key (Grok Bot and clients that send a header)</h3>
+<ol class="guide-steps">
+<li>Create an API key on your dashboard. Copy it: it is shown only once.</li>
+<li>In Grok Bot, add a custom MCP connector (streamable HTTP) with:</li>
 </ol>
 <div class="copy-block">
 ${copyField("MCP URL", MCP_ENDPOINT, "copy-url")}
 ${copyField("Header", "Authorization: Bearer <your key>", "copy-header")}
 </div>
-<ol class="guide-steps" start="3"><li>Ask Grok Bot something about your email. Revoke the key any time from your dashboard.</li></ol>
+<ol class="guide-steps" start="3"><li>Ask something about your email. Revoke the key any time from your dashboard.</li></ol>
 </div></section>
 
 <section id="ask" class="section"><div class="container">
 <h2 class="section-title">What you can ask</h2>
-<p class="section-lead">Ask Grok Bot in plain language. It picks the right tools.</p>
+<p class="section-lead">Ask your assistant in plain language. It picks the right tools.</p>
 <ul class="prompts">
 <li class="card prompt">${icon("chat")}<span>“Find invoices from last month”</span></li>
 <li class="card prompt">${icon("chat")}<span>“Summarize unread emails from today”</span></li>
@@ -228,18 +243,19 @@ export function privacyPage(options: { csrf?: string } = {}): string {
 <li>For each mailbox you add: a name, the mailbox address and username, the provider and server settings, and the mailbox password encrypted with AES-256-GCM using a key unique to your account.</li>
 <li>API keys as one-way SHA-256 hashes, with a short prefix, name, and created and last-used times so you can tell them apart.</li>
 <li>Session records for signed-in browsers, which expire after seven days.</li>
+<li>For apps you connect with “Sign in with OpenMail” (OAuth): the app's name, its redirect address and, if it identifies itself with a public metadata document, a cached copy of that document; plus the connection (when you approved it and last used it) and its access and refresh tokens as one-way SHA-256 hashes.</li>
 </ul>
 <h2>What we do not store</h2>
 <ul>
 <li>Email messages, attachments, subjects, or contacts. They are fetched from your provider when your agent asks and passed straight back to it.</li>
-<li>Plain-text passwords or API keys. They are never written to logs.</li>
+<li>Plain-text passwords, API keys or OAuth tokens. They are never written to logs.</li>
 </ul>
 <h2>How your data is used</h2>
-<p>Mailbox credentials are used only to sign in to your provider when you, or an agent holding one of your API keys, make a request. OpenMail does not sell, share, or analyse your data, and does not use it for advertising or for training models.</p>
+<p>Mailbox credentials are used only to sign in to your provider when you, or an agent holding one of your API keys or an app you approved, make a request. OpenMail does not sell, share, or analyse your data, and does not use it for advertising or for training models.</p>
 <h2>Your agent</h2>
 <p>Messages OpenMail returns go to the agent you connected. How that agent and its provider handle them is covered by their own policies.</p>
 <h2>Security</h2>
-<p>All traffic uses HTTPS. Access is read-only: OpenMail cannot send, delete, move, or flag mail. Revoke an API key or remove a mailbox from your dashboard at any time, and it stops working immediately.</p>
+<p>All traffic uses HTTPS. Access is read-only: OpenMail cannot send, delete, move, or flag mail. Revoke an API key, disconnect an app or remove a mailbox from your dashboard at any time, and it stops working immediately.</p>
 <h2>Deleting your data</h2>
 <p>Removing a mailbox deletes its stored settings and encrypted password. To delete your whole account, email <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a> from your login address.</p>
 <h2>Changes</h2>
@@ -290,17 +306,25 @@ export function authPage(input: {
   csrf: string;
   email?: string;
   errors?: string[];
+  /** Validated same-site path to continue to after sign-in (OAuth authorize). */
+  next?: string;
 }): string {
   const signup = input.mode === "signup";
   const title = signup ? "Sign up" : "Log in";
   const action = signup ? "/signup" : "/login";
   const button = signup ? "Create account" : "Log in";
+  const nextQuery = input.next ? `?next=${encodeURIComponent(input.next)}` : "";
   const other = signup
-    ? `<p>Already have an account? <a href="/login">Log in</a></p>`
-    : `<p>No account yet? <a href="/signup">Sign up</a></p>`;
-  const intro = signup
-    ? "Create a free account, then add a mailbox and an API key."
-    : "Welcome back. Log in to manage your mailboxes and keys.";
+    ? `<p>Already have an account? <a href="/login${escapeHtml(nextQuery)}">Log in</a></p>`
+    : `<p>No account yet? <a href="/signup${escapeHtml(nextQuery)}">Sign up</a></p>`;
+  const intro = input.next
+    ? signup
+      ? "Create a free OpenMail account to connect your assistant. You can add a mailbox right after."
+      : "Log in to OpenMail to connect your assistant."
+    : signup
+      ? "Create a free account, then add a mailbox and connect your assistant."
+      : "Welcome back. Log in to manage your mailboxes, keys and connected apps.";
+  const nextField = input.next ? `\n<input type="hidden" name="next" value="${escapeHtml(input.next)}">` : "";
   return layout(
     `${title} · OpenMail`,
     `<div class="auth"><div class="card auth-card">
@@ -308,7 +332,7 @@ export function authPage(input: {
 <h1>${title}</h1><p class="muted">${intro}</p>
 ${errorBlock(input.errors)}
 <form class="stack" method="post" action="${action}">
-<input type="hidden" name="_csrf" value="${escapeHtml(input.csrf)}">
+<input type="hidden" name="_csrf" value="${escapeHtml(input.csrf)}">${nextField}
 <label>Email <input name="email" type="email" autocomplete="username" maxlength="254" value="${escapeHtml(input.email ?? "")}" required></label>
 <label>Password <input name="password" type="password" autocomplete="${signup ? "new-password" : "current-password"}" minlength="${signup ? "10" : "1"}" maxlength="200" required></label>
 <button class="btn btn-primary btn-block" type="submit">${button}</button>
@@ -325,6 +349,7 @@ export function dashboardPage(input: {
   csrf: string;
   accounts: MailAccountSummary[];
   keys: ApiKeySummary[];
+  grants?: GrantSummary[];
   mcpUrl: string | null;
   draft: AccountDraft;
   errors?: string[];
@@ -341,6 +366,8 @@ ${alerts}
 <div class="dash-grid">
 <div class="card">${accountList(input.accounts, input.csrf)}</div>
 <div class="card">${accountForm(input.draft, input.csrf)}</div>
+<div class="card">${grantList(input.grants ?? [], input.csrf)}</div>
+<div class="card">${oauthSection(input.mcpUrl)}</div>
 <div class="card">${keyList(input.keys, input.csrf)}${keyForm(input.csrf)}</div>
 <div class="card">${grokSection(input.mcpUrl)}</div>
 </div>`,
@@ -459,6 +486,113 @@ function grokSection(mcpUrl: string | null): string {
 ${copyField("MCP URL", url, "dash-url")}
 ${copyField("Header", "Authorization: Bearer <your key>", "dash-header")}
 </section>`;
+}
+
+function grantList(grants: GrantSummary[], csrf: string): string {
+  const intro = `<p class="muted">Apps you connected with “Sign in with OpenMail” (OAuth), such as Claude or ChatGPT. Disconnecting one stops it at once.</p>`;
+  if (grants.length === 0) {
+    return `<section id="connected-apps"><h2>Connected apps</h2>${intro}<p>No connected apps yet.</p></section>`;
+  }
+  const items = grants
+    .map((grant) => {
+      const verified = grant.clientKind === "cimd" && grant.clientHost
+        ? `<p><span class="muted">Verified domain</span> ${escapeHtml(grant.clientHost)}</p>`
+        : `<p><span class="muted">Identity</span> name supplied by the app</p>`;
+      return `<li>
+<p><span class="muted">App</span> ${escapeHtml(grant.clientName)}</p>
+${verified}
+<p><span class="muted">Returns to</span> ${escapeHtml(grant.redirectHost)}</p>
+<p><span class="muted">Access</span> read-only (${escapeHtml(grant.scope)})</p>
+<p><span class="muted">Connected</span> ${escapeHtml(grant.createdAt)}</p>
+<p><span class="muted">Last used</span> ${escapeHtml(grant.lastUsedAt ?? "Never")}</p>
+<form method="post" action="/apps/${escapeHtml(grant.id)}/revoke"><input type="hidden" name="_csrf" value="${escapeHtml(csrf)}"><button class="secondary" type="submit">Disconnect</button></form>
+</li>`;
+    })
+    .join("");
+  return `<section id="connected-apps"><h2>Connected apps</h2>${intro}<ul class="records">${items}</ul></section>`;
+}
+
+function oauthSection(mcpUrl: string | null): string {
+  const url = mcpUrl ?? "Set OPENMAIL_PUBLIC_URL";
+  return `<section id="oauth-connect"><h2>Connect with sign-in (OAuth)</h2>
+<p>For assistants that support MCP sign-in, such as Claude or ChatGPT: add OpenMail as a custom connector with just this URL. You will be sent here to log in and approve read-only access. No API key needed.</p>
+${copyField("MCP URL", url, "dash-oauth-url")}
+</section>`;
+}
+
+export interface ConsentView {
+  csrf: string;
+  email: string;
+  clientName: string;
+  clientKind: "dcr" | "cimd";
+  /** The full metadata-document URL for CIMD clients, otherwise empty. */
+  clientUrl: string;
+  /** The exact redirect_uri of this request. */
+  redirectUri: string;
+  redirectHost: string;
+  loopback: boolean;
+  accounts: MailAccountSummary[];
+  params: Record<string, string>;
+}
+
+/** "<app> wants read-only access to your OpenMail mailboxes" with Allow / Deny. */
+export function consentPage(view: ConsentView): string {
+  const hidden = Object.entries(view.params)
+    .map(([name, value]) => `<input type="hidden" name="${escapeHtml(name)}" value="${escapeHtml(value)}">`)
+    .join("\n");
+  const identity =
+    view.clientKind === "cimd"
+      ? `<p class="fine">${icon("shield")} The app's details were published at <strong class="consent-url">${escapeHtml(view.clientUrl)}</strong>. Only allow it if you trust that address.</p>`
+      : `<p class="fine">${icon("shield")} The name “${escapeHtml(view.clientName)}” was supplied by the app itself and is not verified. Check where you will be sent back to below.</p>`;
+  const loopback = view.loopback
+    ? `<div class="notice warn" role="note"><p>This app runs on your own computer (<strong>${escapeHtml(view.redirectHost)}</strong>). Only allow it if you started this connection yourself just now.</p></div>`
+    : "";
+  const mailboxes =
+    view.accounts.length === 0
+      ? `<p class="muted">You have no mailboxes yet. After connecting, add one from your <a href="/dashboard">dashboard</a>.</p>`
+      : `<ul class="consent-list">${view.accounts
+          .map((a) => `<li>${icon("inbox")}<span><strong>${escapeHtml(a.name)}</strong> · ${escapeHtml(a.email)}</span></li>`)
+          .join("")}</ul>`;
+  return layout(
+    "Allow access · OpenMail",
+    `<div class="auth"><div class="card auth-card consent">
+<a class="auth-logo" href="/"><img src="/logo.svg" alt="OpenMail" width="56" height="56"></a>
+<h1><span class="consent-app">${escapeHtml(view.clientName)}</span> wants read-only access to your OpenMail mailboxes</h1>
+<p class="muted">Signed in as ${escapeHtml(view.email)}</p>
+${identity}
+${loopback}
+<h2>It will be able to</h2>
+<ul class="consent-list">
+<li>${icon("check")}<span>List your mailboxes and folders</span></li>
+<li>${icon("check")}<span>Search and read your messages and threads</span></li>
+</ul>
+<h2>It will not be able to</h2>
+<ul class="consent-list">
+<li>${icon("lock")}<span>Send, delete, move or flag mail, or mark it as read</span></li>
+<li>${icon("lock")}<span>See your mailbox passwords or your OpenMail password</span></li>
+</ul>
+<h2>Mailboxes it can read</h2>
+${mailboxes}
+<p>After you choose, you will be sent back to <strong>${escapeHtml(view.redirectHost)}</strong>:</p>
+<p class="fine consent-url">${escapeHtml(view.redirectUri)}</p>
+<form method="post" action="/oauth/authorize" class="consent-actions">
+<input type="hidden" name="_csrf" value="${escapeHtml(view.csrf)}">
+${hidden}
+<button class="btn btn-primary" type="submit" name="decision" value="allow">Allow</button>
+<button class="btn btn-secondary" type="submit" name="decision" value="deny">Deny</button>
+</form>
+<p class="fine">You can disconnect it at any time under Connected apps on your dashboard.</p>
+</div></div>`,
+    { csrf: view.csrf, path: "/oauth/authorize", description: "Approve an app's read-only access to your OpenMail mailboxes." },
+  );
+}
+
+/** Shown when the request cannot safely be sent back to the app (bad client or redirect_uri). */
+export function oauthErrorPage(title: string, text: string): string {
+  return layout(
+    `${title} · OpenMail`,
+    `<div class="card status"><h1>${escapeHtml(title)}</h1><p>${escapeHtml(text)}</p><p class="muted">Go back to the app and try connecting again. If it keeps happening, contact <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>.</p><p><a class="btn btn-secondary" href="/">Home</a></p></div>`,
+  );
 }
 
 function option(value: string, label: string, selected: boolean): string {

@@ -42,6 +42,11 @@ export interface OpenMailServerOptions {
   web?: WebRequestHandler;
   /** Applied to every response, including MCP and health checks. */
   security?: SecurityHeaderOptions;
+  /**
+   * WWW-Authenticate value for 401s on /mcp. Multi-user mode passes the OAuth
+   * challenge (resource_metadata + scope) so MCP clients can discover sign-in.
+   */
+  challenge?: (invalidToken: boolean) => string;
 }
 
 export function createOpenMailServer(options: OpenMailServerOptions): Server {
@@ -64,6 +69,7 @@ export function createOpenMailServer(options: OpenMailServerOptions): Server {
       imap: options.imap,
       ...(options.web ? { web: options.web } : {}),
       security: options.security ?? {},
+      challenge: options.challenge ?? (() => 'Bearer realm="openmail"'),
     }).catch(() => {
       if (res.headersSent || res.writableEnded) return;
       writeJson(res, 500, { ok: false, error: { code: "internal_error", message: "Internal server error" } });
@@ -99,7 +105,17 @@ interface HandlerDeps {
   imap: ImapGateway;
   web?: WebRequestHandler;
   security: SecurityHeaderOptions;
+  challenge: (invalidToken: boolean) => string;
 }
+
+/** Browser-based MCP clients (e.g. MCP Inspector) call /mcp cross-origin with a bearer token; no cookies are used. */
+const MCP_CORS: Record<string, string> = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
+  "access-control-allow-headers": "authorization, content-type, accept, mcp-protocol-version, mcp-session-id, last-event-id",
+  "access-control-expose-headers": "www-authenticate, mcp-session-id, mcp-protocol-version",
+  "access-control-max-age": "600",
+};
 
 function staticAuthenticator(hashes: readonly Buffer[], userId: string): RequestAuthenticator {
   return (authorizationHeader) => {
@@ -132,6 +148,14 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: Handle
     return;
   }
 
+  for (const [name, value] of Object.entries(MCP_CORS)) res.setHeader(name, value);
+  if (req.method === "OPTIONS") {
+    drain(req);
+    res.writeHead(204, { "content-length": 0 });
+    res.end();
+    return;
+  }
+
   const principal = await options.authenticate(req.headers.authorization);
   if (!principal) {
     drain(req);
@@ -151,7 +175,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: Handle
       res,
       401,
       { ok: false, error: { code: "unauthorized", message: "Unauthorized" } },
-      { "www-authenticate": 'Bearer realm="openmail"' },
+      { "www-authenticate": options.challenge(req.headers.authorization !== undefined) },
     );
     return;
   }

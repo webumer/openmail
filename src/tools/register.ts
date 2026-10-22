@@ -53,7 +53,7 @@ export function registerMailTools(server: McpServer, deps: MailDeps & { userId: 
         "List mailbox accounts: id, label, email address, provider preset, and IMAP host. Passwords are never returned.",
       ),
       inputSchema: listAccountsInput,
-      annotations: READ_ONLY_ANNOTATIONS,
+      annotations: { ...READ_ONLY_ANNOTATIONS, title: "List accounts" },
     },
     async () => toCallToolResult(await listAccounts(deps.store, userId)),
   );
@@ -66,7 +66,7 @@ export function registerMailTools(server: McpServer, deps: MailDeps & { userId: 
         "List folders for an account, including special-use and message counts when the server provides them.",
       ),
       inputSchema: listFoldersInput,
-      annotations: READ_ONLY_ANNOTATIONS,
+      annotations: { ...READ_ONLY_ANNOTATIONS, title: "List folders" },
     },
     async (args) => toCallToolResult(await listFolders(deps, userId, args.account)),
   );
@@ -79,7 +79,7 @@ export function registerMailTools(server: McpServer, deps: MailDeps & { userId: 
         "Search one folder, newest first. Returns an opaque next_cursor when more matches exist. Attachment filtering uses BODYSTRUCTURE.",
       ),
       inputSchema: searchMessagesInput,
-      annotations: READ_ONLY_ANNOTATIONS,
+      annotations: { ...READ_ONLY_ANNOTATIONS, title: "Search messages" },
     },
     async (args) =>
       toCallToolResult(
@@ -107,7 +107,7 @@ export function registerMailTools(server: McpServer, deps: MailDeps & { userId: 
         "Read one message by UID without setting the \\Seen flag. HTML is converted to text when there is no text part. The body is capped at 20,000 characters. Attachments are listed without their bytes.",
       ),
       inputSchema: readMessageInput,
-      annotations: READ_ONLY_ANNOTATIONS,
+      annotations: { ...READ_ONLY_ANNOTATIONS, title: "Read message" },
     },
     async (args) => toCallToolResult(await readMessage(deps, userId, args.account, args.folder, args.uid)),
   );
@@ -120,7 +120,7 @@ export function registerMailTools(server: McpServer, deps: MailDeps & { userId: 
         "Read the Message-ID, In-Reply-To, and References chain for one message, oldest first, without setting \\Seen. Combined body text is capped at 40,000 characters.",
       ),
       inputSchema: readThreadInput,
-      annotations: READ_ONLY_ANNOTATIONS,
+      annotations: { ...READ_ONLY_ANNOTATIONS, title: "Read thread" },
     },
     async (args) => toCallToolResult(await readThread(deps, userId, args.account, args.folder, args.uid)),
   );

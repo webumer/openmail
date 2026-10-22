@@ -34,6 +34,7 @@ import {
 import { createWebHandler, resolveSecureCookies } from "./web/index.js";
 import { parseInsecureImapHosts } from "./mail/tls.js";
 import { demoConfigFromEnv, reseedIntervalFromEnv, startDemoSeeder } from "./demo/seed.js";
+import { bearerChallenge, createDocumentFetcher, createOAuthHandler, deriveOAuthConfig } from "./oauth/index.js";
 
 export { loadConfig, parseConfig, resolveOpenMailMode, type AccountConfig, type AppConfig, type OpenMailMode, type ServerConfig };
 export { loadMasterKey, generateTestMasterKey } from "./crypto/index.js";
@@ -124,11 +125,24 @@ async function listenMulti(config: AppConfig | undefined): Promise<void> {
     secureCookies,
     bodyLimit: BODY_LIMIT_BYTES,
   });
+  // OAuth 2.1 sign-in (Claude, ChatGPT, Muse...) runs only with an https public URL.
+  const oauthConfig = deriveOAuthConfig(publicUrl);
+  const oauth = oauthConfig
+    ? createOAuthHandler({
+        db,
+        config: oauthConfig,
+        fetcher: createDocumentFetcher(),
+        trustProxy,
+        bodyLimit: BODY_LIMIT_BYTES,
+        ...(process.env.OPENMAIL_OPENAI_CHALLENGE ? { openaiChallenge: process.env.OPENMAIL_OPENAI_CHALLENGE } : {}),
+      })
+    : undefined;
   const server = createOpenMailServer({
     store: new SqliteCredentialStore(db, masterKey, { allowInsecureLocalhost, insecureImapHosts }),
     imap,
-    authenticate: (header) => authenticateDatabaseKey(db, header),
-    web,
+    authenticate: (header) => authenticateDatabaseKey(db, header, oauthConfig?.resource),
+    web: oauth ? async (req, res) => (await oauth(req, res)) || (await web(req, res)) : web,
+    ...(oauthConfig ? { challenge: (invalid: boolean) => bearerChallenge(oauthConfig, invalid) } : {}),
     security: {
       ...(publicUrl ? { publicUrl } : {}),
       trustProxy,

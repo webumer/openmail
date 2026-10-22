@@ -42,9 +42,14 @@ export const readMessageInput = z
 
 export const readThreadInput = readMessageInput;
 
+/**
+ * Every tool only reads the caller's own mailboxes: no writes, no deletes, and
+ * no reach beyond the user's bounded private account, so openWorldHint is
+ * false (OpenAI's definition: false when limited to a bounded private account).
+ */
 export const READ_ONLY_ANNOTATIONS = {
   readOnlyHint: true,
   destructiveHint: false,
   idempotentHint: true,
-  openWorldHint: true,
+  openWorldHint: false,
 } as const;

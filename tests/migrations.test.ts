@@ -20,13 +20,16 @@ describe("migrations", () => {
       version: number;
       applied_at: string;
     }[];
-    expect(first).toEqual([{ version: 1, applied_at: expect.any(String) }]);
+    expect(first).toEqual([
+      { version: 1, applied_at: expect.any(String) },
+      { version: 2, applied_at: expect.any(String) },
+    ]);
 
     migrate(db);
     const second = db.prepare("SELECT version, applied_at FROM schema_migrations").all();
     expect(second).toEqual(first);
 
-    expect(tableNames(db)).toEqual(["api_keys", "mail_accounts", "schema_migrations", "sessions", "users"]);
+    expect(tableNames(db)).toEqual(["api_keys", "mail_accounts", "oauth_clients", "oauth_codes", "oauth_grants", "oauth_tokens", "schema_migrations", "sessions", "users"]);
     expect(columnNames(db, "users")).toEqual(["id", "email", "password_hash", "wrapped_data_key", "created_at"]);
     expect(columnNames(db, "sessions")).toEqual(["id", "user_id", "csrf_secret", "created_at", "expires_at"]);
     expect(columnNames(db, "api_keys")).toEqual([

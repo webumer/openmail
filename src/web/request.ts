@@ -90,6 +90,7 @@ export async function readBody(
 
 const KNOWN_FIELDS = new Set([
   "_csrf",
+  "next",
   "email",
   "password",
   "name",

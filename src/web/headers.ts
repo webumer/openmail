@@ -11,6 +11,20 @@ export const PERMISSIONS_POLICY =
 export const HSTS_VALUE = "max-age=31536000; includeSubDomains";
 
 const wrapped = new WeakSet<ServerResponse>();
+const forcedHeaders = new WeakMap<ServerResponse, OutgoingHttpHeaders>();
+
+/**
+ * Replaces the CSP for one response. Used by the OAuth consent page, whose
+ * form posts to OpenMail and is then redirected to the client's callback:
+ * browsers apply form-action to that redirect, so the callback origin must
+ * be allowed for this page only.
+ */
+export function overrideContentSecurityPolicy(res: ServerResponse, value: string): void {
+  if (/[\r\n]/.test(value)) throw new Error("Invalid CSP");
+  const forced = forcedHeaders.get(res);
+  if (forced) forced["content-security-policy"] = value;
+  res.setHeader("content-security-policy", value);
+}
 
 export interface SecurityHeaderOptions {
   publicUrl?: string;
@@ -33,6 +47,7 @@ export function applySecurityHeaders(
     "cross-origin-opener-policy": "same-origin",
   };
   if (shouldSendHsts(req, options)) forced["strict-transport-security"] = HSTS_VALUE;
+  forcedHeaders.set(res, forced);
   for (const [name, value] of Object.entries(forced)) {
     if (value !== undefined) res.setHeader(name, value);
   }

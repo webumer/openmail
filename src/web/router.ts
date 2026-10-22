@@ -34,6 +34,8 @@ import { mcpUrl } from "./public-url.js";
 import { AUTH_ATTEMPT_LIMIT, AUTH_ATTEMPT_WINDOW_MS, attemptAllowed, rateLimitEmail } from "./rate.js";
 import { clientAddress, formFields, isFormContentType, readBody, requestUrl, reviewerGuideMarkdown, staticFile } from "./request.js";
 import { createSession, destroySession, readSession, safeEqual, type SessionRecord } from "./session.js";
+import { safeNext } from "./next.js";
+import { listGrants, revokeGrantForUser } from "../oauth/grants.js";
 
 export interface WebAppConfig {
   db: Database;
@@ -66,12 +68,14 @@ const NOTICES: Record<string, string> = {
   "account-added": "Mail account saved.",
   "account-removed": "Mail account removed.",
   "key-revoked": "API key revoked.",
+  "app-revoked": "App disconnected. Its access stopped immediately.",
   "logged-out": "You have been logged out.",
 };
 
 const ACCOUNT_DELETE =
   /^\/accounts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/delete$/i;
 const KEY_REVOKE = /^\/keys\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/revoke$/i;
+const APP_REVOKE = /^\/apps\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/revoke$/i;
 
 interface Handler extends WebRuntime {
   loginAttempts: SlidingWindowRateLimit;
@@ -125,13 +129,14 @@ async function route(req: IncomingMessage, res: ServerResponse, url: URL, handle
 
   const accountDelete = ACCOUNT_DELETE.exec(pathname);
   const keyRevoke = KEY_REVOKE.exec(pathname);
+  const appRevoke = APP_REVOKE.exec(pathname);
   if (pathname === "/" && req.method === "GET") return renderHome(req, res, url, handler);
   if (pathname === "/privacy" && req.method === "GET") return renderStatic(req, res, handler, "privacy");
   if (pathname === "/terms" && req.method === "GET") return renderStatic(req, res, handler, "terms");
   if (pathname === "/reviewers" && req.method === "GET") return renderStatic(req, res, handler, "reviewers");
-  if (pathname === "/signup" && req.method === "GET") return renderAuth(req, res, handler, "signup");
+  if (pathname === "/signup" && req.method === "GET") return renderAuth(req, res, url, handler, "signup");
   if (pathname === "/signup" && req.method === "POST") return submitAuth(req, res, handler, "signup");
-  if (pathname === "/login" && req.method === "GET") return renderAuth(req, res, handler, "login");
+  if (pathname === "/login" && req.method === "GET") return renderAuth(req, res, url, handler, "login");
   if (pathname === "/login" && req.method === "POST") return submitAuth(req, res, handler, "login");
   if (pathname === "/logout" && req.method === "POST") return submitLogout(req, res, handler);
   if (pathname === "/dashboard" && req.method === "GET") return renderDashboard(req, res, url, handler);
@@ -140,8 +145,9 @@ async function route(req: IncomingMessage, res: ServerResponse, url: URL, handle
   if (accountDelete && req.method === "POST") return submitAccountDelete(req, res, handler, accountDelete[1] ?? "");
   if (pathname === "/keys" && req.method === "POST") return submitKey(req, res, url, handler);
   if (keyRevoke && req.method === "POST") return submitKeyRevoke(req, res, handler, keyRevoke[1] ?? "");
+  if (appRevoke && req.method === "POST") return submitAppRevoke(req, res, handler, appRevoke[1] ?? "");
 
-  const allow = allowHeader(pathname, accountDelete !== null, keyRevoke !== null);
+  const allow = allowHeader(pathname, accountDelete !== null, keyRevoke !== null || appRevoke !== null);
   methodNotAllowed(req, res, allow);
 }
 
@@ -166,7 +172,8 @@ function isWebPath(pathname: string): boolean {
     pathname === "/static/site.js" ||
     pathname === "/og.png" ||
     ACCOUNT_DELETE.test(pathname) ||
-    KEY_REVOKE.test(pathname)
+    KEY_REVOKE.test(pathname) ||
+    APP_REVOKE.test(pathname)
   );
 }
 
@@ -209,15 +216,16 @@ function renderStatic(
   writeHtml(res, 200, html);
 }
 
-function renderAuth(req: IncomingMessage, res: ServerResponse, handler: Handler, mode: "signup" | "login"): void {
+function renderAuth(req: IncomingMessage, res: ServerResponse, url: URL, handler: Handler, mode: "signup" | "login"): void {
   req.resume();
   const cookies = readCookies(cookieHeader(req));
+  const next = safeNext(url.searchParams.get("next"));
   if (readSession(handler.db, cookies.get(SESSION_COOKIE))) {
-    redirect(res, "/dashboard");
+    redirect(res, next ?? "/dashboard");
     return;
   }
   const issued = issuePreSessionCsrf(handler.secureCookies);
-  writeHtml(res, 200, authPage({ mode, csrf: issued.token }), [issued.cookie]);
+  writeHtml(res, 200, authPage({ mode, csrf: issued.token, ...(next ? { next } : {}) }), [issued.cookie]);
 }
 
 async function submitAuth(
@@ -241,20 +249,22 @@ async function submitAuth(
     limited(res);
     return;
   }
+  const next = safeNext(fields.next);
+  const nextOpt = next ? { next } : {};
   const parsed = mode === "signup" ? parseSignup(fields) : parseLogin(fields);
   if (!parsed.email || parsed.password === undefined || parsed.errors.length > 0) {
-    writeHtml(res, 400, authPage({ mode, csrf: expected, email: clipField(fields.email), errors: parsed.errors }));
+    writeHtml(res, 400, authPage({ mode, csrf: expected, email: clipField(fields.email), errors: parsed.errors, ...nextOpt }));
     return;
   }
   if (mode === "signup") {
     try {
       const user = await users.create(handler.db, handler.masterKey, { email: parsed.email, password: parsed.password });
-      startSession(res, handler, cookies.get(SESSION_COOKIE), user.id);
+      startSession(res, handler, cookies.get(SESSION_COOKIE), user.id, next);
     } catch (err) {
       const message = safeMailMessage(err, parsed.password);
       if (!message) throw err;
       const status = err instanceof MailError && err.code === "conflict" ? 409 : 400;
-      writeHtml(res, status, authPage({ mode, csrf: expected, email: parsed.email, errors: [message] }));
+      writeHtml(res, status, authPage({ mode, csrf: expected, email: parsed.email, errors: [message], ...nextOpt }));
     }
     return;
   }
@@ -263,11 +273,11 @@ async function submitAuth(
     writeHtml(
       res,
       401,
-      authPage({ mode, csrf: expected, email: parsed.email, errors: ["Email or password is incorrect"] }),
+      authPage({ mode, csrf: expected, email: parsed.email, errors: ["Email or password is incorrect"], ...nextOpt }),
     );
     return;
   }
-  startSession(res, handler, cookies.get(SESSION_COOKIE), user.id);
+  startSession(res, handler, cookies.get(SESSION_COOKIE), user.id, next);
 }
 
 async function submitLogout(req: IncomingMessage, res: ServerResponse, handler: Handler): Promise<void> {
@@ -434,10 +444,36 @@ async function submitKeyRevoke(req: IncomingMessage, res: ServerResponse, handle
   redirect(res, "/dashboard?notice=key-revoked");
 }
 
-function startSession(res: ServerResponse, handler: Handler, previous: string | undefined, userId: string): void {
+async function submitAppRevoke(req: IncomingMessage, res: ServerResponse, handler: Handler, grantId: string): Promise<void> {
+  const session = currentSession(req, handler);
+  if (!session) {
+    req.resume();
+    redirect(res, "/login");
+    return;
+  }
+  const fields = await readForm(req, res, handler.bodyLimit);
+  if (!fields) return;
+  if (!csrfOk(session, fields)) {
+    forbidden(res);
+    return;
+  }
+  if (!revokeGrantForUser(handler.db, session.userId, grantId.toLowerCase())) {
+    writeHtml(res, 404, statusPage("Not found", "Connected app was not found."));
+    return;
+  }
+  redirect(res, "/dashboard?notice=app-revoked");
+}
+
+function startSession(
+  res: ServerResponse,
+  handler: Handler,
+  previous: string | undefined,
+  userId: string,
+  next?: string,
+): void {
   const created = createSession(handler.db, userId);
   if (previous) destroySession(handler.db, previous);
-  redirect(res, "/dashboard", [
+  redirect(res, next ?? "/dashboard", [
     serializeCookie(SESSION_COOKIE, created.token, { maxAge: SESSION_MAX_AGE_SECONDS, secure: handler.secureCookies }),
     clearCookie(CSRF_COOKIE, handler.secureCookies),
   ]);
@@ -458,6 +494,7 @@ function writeDashboard(
       csrf: session.csrfSecret,
       accounts: mailAccounts.list(handler.db, session.userId),
       keys: apiKeys.list(handler.db, session.userId),
+      grants: listGrants(handler.db, session.userId),
       mcpUrl: mcpUrl(handler.publicUrl),
       draft: input.draft,
       ...(input.errors && input.errors.length > 0 ? { errors: input.errors } : {}),

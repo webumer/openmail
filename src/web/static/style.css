@@ -280,3 +280,16 @@ label.check input { width: auto; }
 .errors ul { margin: 0; padding-left: 1.1rem; }
 .notice p { margin: 0; }
 .landing .notice { margin-top: 1rem; }
+
+/* OAuth consent */
+.auth-card.consent { max-width: 32rem; }
+.consent h1 { font-size: 1.35rem; line-height: 1.35; }
+.consent h2 { font-size: 0.95rem; margin: 1.25rem 0 0.5rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.consent-app { color: var(--brand, #0E7C66); word-break: break-word; }
+.consent-url { word-break: break-all; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em; }
+.consent-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.45rem; }
+.consent-list li { display: flex; gap: 0.6rem; align-items: flex-start; }
+.consent-list .icon { flex: none; width: 20px; height: 20px; margin-top: 0.1rem; }
+.consent .fine .icon { width: 16px; height: 16px; vertical-align: -3px; }
+.consent-actions { display: flex; gap: 0.75rem; margin-top: 1.25rem; }
+.consent-actions .btn { flex: 1; }
