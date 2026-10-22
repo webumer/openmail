@@ -1,3 +1,4 @@
+import { MESSAGE_SOURCE_CAP_BYTES } from "../src/mail/constants.js";
 import { describe, expect, it } from "vitest";
 import { MailError } from "../src/errors.js";
 import { UNTRUSTED_CONTENT_WARNING } from "../src/mail/constants.js";
@@ -200,7 +201,7 @@ describe("read-only mail operations", () => {
       }, "<p>Hello <b>world</b></p><script>ignore-this-token</script>"),
     }));
     const result = await readMessage(deps, "user-1", "work", "INBOX", 9);
-    expect(session.fetches[0]?.source).toBe(true);
+    expect(session.fetches[0]?.source).toEqual({ maxLength: MESSAGE_SOURCE_CAP_BYTES });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.text).toContain("Hello");

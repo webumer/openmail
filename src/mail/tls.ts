@@ -53,7 +53,13 @@ export interface ImapConnectOptions extends ImapFlowOptions {
   logger: false;
   logRaw: false;
   emitLogs: false;
+  servername?: string;
 }
+
+/** A slow or silent server must not hold a request (and its memory) for minutes. */
+export const IMAP_CONNECTION_TIMEOUT_MS = 15_000;
+export const IMAP_GREETING_TIMEOUT_MS = 15_000;
+export const IMAP_SOCKET_TIMEOUT_MS = 60_000;
 
 export function buildImapConnectOptions(account: AccountCredentials): ImapConnectOptions {
   assertImapTransportAllowed(account);
@@ -67,6 +73,9 @@ export function buildImapConnectOptions(account: AccountCredentials): ImapConnec
     logRaw: false,
     emitLogs: false,
     disableAutoIdle: true,
+    connectionTimeout: IMAP_CONNECTION_TIMEOUT_MS,
+    greetingTimeout: IMAP_GREETING_TIMEOUT_MS,
+    socketTimeout: IMAP_SOCKET_TIMEOUT_MS,
   };
   if (!account.imap.secure) options.doSTARTTLS = false;
   return options;

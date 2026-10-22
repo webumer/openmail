@@ -12,6 +12,7 @@ import {
 import type { AccountCredentials } from "../store/types.js";
 import { toMailError } from "../errors.js";
 import { buildImapConnectOptions } from "./tls.js";
+import { defaultResolver, resolveConnectTarget, type Resolver } from "./address-guard.js";
 import { parseThreadResponse, threadContaining } from "./thread.js";
 import type { BodyNode } from "./structure.js";
 import type {
@@ -52,13 +53,22 @@ interface ImapClient {
   ): Promise<ExecResult>;
 }
 
-export function createImapGateway(factory: (options: ImapFlowOptions) => ImapClient = defaultClient): ImapGateway {
+export interface ImapGatewayOptions {
+  /** DNS lookup used to pin each connection to a checked public address. Tests inject one. */
+  resolve?: Resolver;
+}
+
+export function createImapGateway(
+  factory: (options: ImapFlowOptions) => ImapClient = defaultClient,
+  gatewayOptions: ImapGatewayOptions = {},
+): ImapGateway {
+  const resolve = gatewayOptions.resolve ?? defaultResolver;
   return {
     withClient(account, fn) {
-      return run(factory, account, async (session) => fn(session));
+      return run(factory, resolve, account, async (session) => fn(session));
     },
     withMailbox(account, folder, fn) {
-      return run(factory, account, async (session, client) => {
+      return run(factory, resolve, account, async (session, client) => {
         const lock = await client.getMailboxLock(folder, { readOnly: true });
         try {
           return await fn(session);
@@ -76,10 +86,17 @@ function defaultClient(options: ImapFlowOptions): ImapClient {
 
 async function run<T>(
   factory: (options: ImapFlowOptions) => ImapClient,
+  resolve: Resolver,
   account: AccountCredentials,
   fn: (session: ImapSession, client: ImapClient) => Promise<T>,
 ): Promise<T> {
-  const client = factory(buildImapConnectOptions(account));
+  // Transport rules first (no DNS for a refused cleartext host), then pin the
+  // socket to an address checked just now, so DNS cannot move it to a private one.
+  const options = buildImapConnectOptions(account);
+  const target = await resolveConnectTarget(account, resolve);
+  options.host = target.host;
+  if (target.servername) options.servername = target.servername;
+  const client = factory(options);
   try {
     await client.connect();
   } catch (err) {
@@ -191,7 +208,10 @@ function toFetchQuery(query: MessageFetchQuery): FetchQueryObject {
   if (query.bodyStructure) fetchQuery.bodyStructure = true;
   if (query.internalDate) fetchQuery.internalDate = true;
   if (query.size) fetchQuery.size = true;
-  if (query.source) fetchQuery.source = true;
+  if (query.source) {
+    // Partial fetches still use BODY.PEEK[]<0.n>, so \\Seen is never set.
+    fetchQuery.source = query.source === true ? true : { start: 0, maxLength: query.source.maxLength };
+  }
   if (query.headers) fetchQuery.headers = [...query.headers];
   return fetchQuery;
 }

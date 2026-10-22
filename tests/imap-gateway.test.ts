@@ -5,10 +5,12 @@ import { listFolders, readMessage, readThread } from "../src/mail/operations.js"
 import type { CredentialStore } from "../src/store/types.js";
 import { SECRET, account } from "./fixtures.js";
 
+const publicDns = async () => ["93.184.216.34"];
+
 describe("imap gateway", () => {
   it("opens read-only and fetches with BODY.PEEK-style source", async () => {
     const client = fakeClient();
-    const gateway = createImapGateway(() => client);
+    const gateway = createImapGateway(() => client, { resolve: publicDns });
     const result = await readMessage(deps(gateway), "user-1", "work", "INBOX", 9);
     expect(result.ok).toBe(true);
     const lock = client.calls.find((call) => call.method === "getMailboxLock");
@@ -16,7 +18,7 @@ describe("imap gateway", () => {
     const fetch = client.calls.find((call) => call.method === "fetchOne");
     const query = fetch?.args[1] as FetchQueryObject;
     const options = fetch?.args[2];
-    expect(query).toMatchObject({ uid: true, source: true, envelope: true, flags: true, bodyStructure: true });
+    expect(query).toMatchObject({ uid: true, source: { start: 0, maxLength: 10 * 1024 * 1024 }, envelope: true, flags: true, bodyStructure: true });
     expect(options).toEqual({ uid: true });
     expect(client.calls.map((call) => call.method)).toEqual(["connect", "getMailboxLock", "fetchOne", "logout"]);
     expect(client.lockReleased).toBe(true);
@@ -26,7 +28,7 @@ describe("imap gateway", () => {
   it("releases the mailbox lock and logs out when fetch fails", async () => {
     const client = fakeClient();
     client.fetchError = new Error(`fetch failed ${SECRET}`);
-    const gateway = createImapGateway(() => client);
+    const gateway = createImapGateway(() => client, { resolve: publicDns });
     const result = await readMessage(deps(gateway), "user-1", "work", "INBOX", 9);
     expect(result).toMatchObject({ ok: false, error: { code: "imap_error" } });
     if (result.ok) return;
@@ -39,7 +41,7 @@ describe("imap gateway", () => {
   it("runs UID THREAD when the capability is present and still opens read-only", async () => {
     const client = fakeClient();
     client.capabilities.set("THREAD=REFS", true);
-    const gateway = createImapGateway(() => client);
+    const gateway = createImapGateway(() => client, { resolve: publicDns });
     const result = await readThread(deps(gateway), "user-1", "work", "INBOX", 7);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -61,7 +63,7 @@ describe("imap gateway", () => {
     const gateway = createImapGateway(() => {
       created = true;
       throw new Error("should not connect");
-    });
+    }, { resolve: publicDns });
     const result = await listFolders(deps(gateway, {
       ...account,
       imap: { host: "imap.example.com", port: 143, secure: false },
@@ -75,7 +77,7 @@ describe("imap gateway", () => {
     const gateway = createImapGateway((received) => {
       options = received;
       return fakeClient();
-    });
+    }, { resolve: publicDns });
     await listFolders(deps(gateway, {
       ...account,
       allowInsecureLocalhost: true,

@@ -4,6 +4,10 @@ import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:
 export const CONTENT_SECURITY_POLICY =
   "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
 
+/** The site uses none of these browser features. */
+export const PERMISSIONS_POLICY =
+  "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()";
+
 export const HSTS_VALUE = "max-age=31536000; includeSubDomains";
 
 const wrapped = new WeakSet<ServerResponse>();
@@ -25,6 +29,8 @@ export function applySecurityHeaders(
     "referrer-policy": "no-referrer",
     "x-content-type-options": "nosniff",
     "x-frame-options": "DENY",
+    "permissions-policy": PERMISSIONS_POLICY,
+    "cross-origin-opener-policy": "same-origin",
   };
   if (shouldSendHsts(req, options)) forced["strict-transport-security"] = HSTS_VALUE;
   for (const [name, value] of Object.entries(forced)) {

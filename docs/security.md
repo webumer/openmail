@@ -19,13 +19,16 @@
 - Login and signup rate-limited per IP and per email (10 attempts / 15 minutes by default) → `429`.
 - Account passwords: minimum 10 characters for user accounts; zod validation with friendly form errors; password fields are never re-filled.
 - Adding a mail account always probes IMAP first; save only on success. "Test connection" and "Save" share a per-user limit (20 sign-in attempts / 15 minutes) → `429`.
-- Custom hosts must resolve only to public addresses (no loopback, private, link-local, CGNAT, multicast or documentation ranges, IPv4 or IPv6) and use standard ports (IMAP 143/993, SMTP 25/465/587/2525). This stops the probe being used to scan the server's own network. Presets skip the check because their hosts are fixed. DNS can change between the probe and later use; the TLS requirement still applies to every later connection.
-- CSP, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` on all responses. HSTS when the request is HTTPS, `OPENMAIL_PUBLIC_URL` is `https://…`, or (with `OPENMAIL_TRUST_PROXY=1`) `X-Forwarded-Proto: https`.
+- Custom hosts must resolve only to public addresses (no loopback, private, link-local, CGNAT, multicast or documentation ranges, IPv4 or IPv6) and use standard ports (IMAP 143/993, SMTP 25/465/587/2525). This stops the probe being used to scan the server's own network. Presets skip this form check because their hosts are fixed.
+- Every IMAP connection (probe, MCP tool, CLI) resolves the host again, refuses it if any address is private, and connects to the checked IP while TLS still verifies the certificate against the original hostname. A hostname that is re-pointed at `127.0.0.1` or `169.254.169.254` after it was saved (DNS rebinding) is refused with `blocked_host`. Only operator-trusted hosts skip this: loopback with `OPENMAIL_ALLOW_INSECURE_LOCALHOST=1`, and exact names on `OPENMAIL_INSECURE_IMAP_HOSTS`.
+- Per-user caps: 25 mail accounts and 25 active API keys.
+- CSP, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Permissions-Policy` and `Cross-Origin-Opener-Policy: same-origin` on all responses. HSTS when the request is HTTPS, `OPENMAIL_PUBLIC_URL` is `https://…`, or (with `OPENMAIL_TRUST_PROXY=1`) `X-Forwarded-Proto: https`.
 
 ## MCP
 
 - Bearer token required on `/mcp`. Unknown or revoked key → `401`.
-- Per-key sliding window (60/min) → `429`. Bodies over 1 MB → `413`.
+- Per-key sliding window (60/min) → `429`. More than 30 failed bearer attempts a minute from one client address → `429`. Bodies over 1 MB → `413`.
+- Resource limits: `read_message` fetches at most 10 MB of a message and `read_thread` at most 1 MB per message (100 messages), always as `BODY.PEEK[]<0.n>` partial fetches; a `has_attachment` search checks at most 2,000 messages; tool string inputs have length limits; IMAP connect/greeting timeouts are 15 s and the socket idle timeout is 60 s.
 - Tools are scoped to the authenticated user. Another user’s account id is `not_found`; IMAP is not contacted.
 - Message bodies, subjects, and headers are untrusted third-party content. Tool descriptions warn callers not to follow instructions found in them.
 
@@ -37,7 +40,7 @@
 
 ## Operator CLI
 
-`node dist/cli/admin.js` (inside the container: `docker compose exec -T openmail node dist/cli/admin.js …`). Passwords and keys are read from stdin or `--password-env VAR`, never from argv, and the CLI prints only ids, names and counts.
+`node dist/cli/admin.js` (inside the container: `docker compose exec -T openmail node dist/cli/admin.js …`). Passwords and keys are read from stdin or `--password-env VAR`, never from argv, and the CLI prints only ids, names and counts. `delete-user --email <e> --yes` removes a user with their sessions, keys and mailboxes.
 
 ## Proxy
 

@@ -24,7 +24,8 @@ export interface FetchedMessage {
 }
 
 export interface MessageFetchQuery {
-  source?: boolean;
+  /** `{ maxLength }` fetches only the first n bytes of the raw message. */
+  source?: boolean | { maxLength: number };
   envelope?: boolean;
   flags?: boolean;
   bodyStructure?: boolean;

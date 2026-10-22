@@ -2,7 +2,10 @@ import type { AccountCredentials, CredentialStore } from "../store/types.js";
 import { MailError } from "../errors.js";
 import { envelopeAddresses, type MailAddress } from "./addresses.js";
 import {
+  ATTACHMENT_SCAN_CAP,
   BODY_CHAR_CAP,
+  MESSAGE_SOURCE_CAP_BYTES,
+  THREAD_SOURCE_CAP_BYTES,
   SEARCH_DEFAULT_LIMIT,
   SEARCH_MAX_LIMIT,
   STATUS_FANOUT_LIMIT,
@@ -27,7 +30,7 @@ export interface MailDeps {
 }
 
 const READ_FETCH: MessageFetchQuery = {
-  source: true,
+  source: { maxLength: MESSAGE_SOURCE_CAP_BYTES },
   envelope: true,
   flags: true,
   bodyStructure: true,
@@ -35,6 +38,16 @@ const READ_FETCH: MessageFetchQuery = {
   size: true,
   headers: ["date", "message-id", "in-reply-to", "references"],
 };
+
+const THREAD_FETCH: MessageFetchQuery = { ...READ_FETCH, source: { maxLength: THREAD_SOURCE_CAP_BYTES } };
+
+function sourceTruncated(message: FetchedMessage, cap: number): boolean {
+  return typeof message.size === "number" && message.size > cap;
+}
+
+function partialWarning(cap: number): string {
+  return `Message is larger than ${Math.round(cap / (1024 * 1024))} MB; only the first part was read, so text and attachments may be incomplete.`;
+}
 
 const SEARCH_FETCH: MessageFetchQuery = {
   envelope: true,
@@ -193,13 +206,19 @@ export async function searchMessages(
     const account = await requireAccount(deps.store, userId, accountId);
     return deps.imap.withMailbox(account, folder, async (session) => {
       const uids = uniquePositive(await session.search(query));
-      const { page, hasMore } = await collectPage(session, uids, params.has_attachment, limit, cursor);
+      const { page, hasMore, scanCapped } = await collectPage(session, uids, params.has_attachment, limit, cursor);
+      const warnings = [UNTRUSTED_CONTENT_WARNING];
+      if (scanCapped) {
+        warnings.push(
+          `Only ${ATTACHMENT_SCAN_CAP} messages were checked for attachments; narrow the search (for example with since/before) to see older ones.`,
+        );
+      }
       return ok(
         {
           messages: page.map((message) => toSearchHit(message, folder)),
           next_cursor: nextCursor(cursor, page, hasMore),
         },
-        { warnings: [UNTRUSTED_CONTENT_WARNING] },
+        { warnings },
       );
     });
   });
@@ -223,6 +242,8 @@ export async function readMessage(
       const capped = capText(parsed.text, BODY_CHAR_CAP);
       const warnings = [UNTRUSTED_CONTENT_WARNING];
       if (capped.truncated) warnings.push(`Body truncated to ${BODY_CHAR_CAP} characters.`);
+      const partial = sourceTruncated(fetched, MESSAGE_SOURCE_CAP_BYTES);
+      if (partial) warnings.push(partialWarning(MESSAGE_SOURCE_CAP_BYTES));
       return ok(
         {
           uid: fetched.uid,
@@ -234,7 +255,7 @@ export async function readMessage(
           seen: isSeen(fetched.flags),
           size: fetched.size,
         },
-        { truncated: capped.truncated, warnings },
+        { truncated: capped.truncated || partial, warnings },
       );
     });
   });
@@ -256,7 +277,9 @@ export async function readThread(
       const resolved = await resolveThreadUids(session, uid, path, warnings);
       const limited = limitThreadUids(resolved, uid, THREAD_MESSAGE_CAP);
       if (limited.truncated) warnings.push(`Thread truncated to ${THREAD_MESSAGE_CAP} messages.`);
-      const fetched = await fetchInOrder(session, limited.uids, READ_FETCH);
+      const fetched = await fetchInOrder(session, limited.uids, THREAD_FETCH);
+      const partial = fetched.some((message) => sourceTruncated(message, THREAD_SOURCE_CAP_BYTES));
+      if (partial) warnings.push(partialWarning(THREAD_SOURCE_CAP_BYTES));
       if (!fetched.some((message) => message.uid === uid && message.source)) {
         throw new MailError("not_found", `Message ${uid} was not found in ${path}`);
       }
@@ -289,7 +312,7 @@ export async function readThread(
             seen: isSeen(item.message.flags),
           })),
         },
-        { truncated: limited.truncated || budget.truncated, warnings },
+        { truncated: limited.truncated || budget.truncated || partial, warnings },
       );
     });
   });
@@ -349,25 +372,26 @@ async function collectPage(
   hasAttachment: boolean | undefined,
   limit: number,
   cursor: CursorPayload | null,
-): Promise<{ page: FetchedMessage[]; hasMore: boolean }> {
+): Promise<{ page: FetchedMessage[]; hasMore: boolean; scanCapped: boolean }> {
   const ordered = applyCursor(sortNewest(uids), cursor);
   if (hasAttachment === undefined) {
     const window = ordered.slice(0, limit + 1);
     const page = await fetchInOrder(session, window.slice(0, limit), SEARCH_FETCH);
-    return { page, hasMore: window.length > limit };
+    return { page, hasMore: window.length > limit, scanCapped: false };
   }
   const page: FetchedMessage[] = [];
   const chunkSize = 50;
-  for (let index = 0; index < ordered.length; index += chunkSize) {
-    const chunk = ordered.slice(index, index + chunkSize);
+  const scan = ordered.slice(0, ATTACHMENT_SCAN_CAP);
+  for (let index = 0; index < scan.length; index += chunkSize) {
+    const chunk = scan.slice(index, index + chunkSize);
     const fetched = await fetchInOrder(session, chunk, SEARCH_FETCH);
     for (const message of fetched) {
       if (hasAttachments(message.bodyStructure) !== hasAttachment) continue;
       if (page.length < limit) page.push(message);
-      else return { page, hasMore: true };
+      else return { page, hasMore: true, scanCapped: false };
     }
   }
-  return { page, hasMore: false };
+  return { page, hasMore: false, scanCapped: ordered.length > scan.length };
 }
 
 async function fetchInOrder(

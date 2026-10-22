@@ -12,7 +12,7 @@ Agent sandboxes often allow outbound traffic only on port 443. IMAP (993) and SM
 
 ## Architecture
 
-See [docs/architecture.md](docs/architecture.md) for modes, package layout, and the HTTP surface. Security details (encryption, CSRF, headers, TLS policy) are in [docs/security.md](docs/security.md).
+See [docs/architecture.md](docs/architecture.md) for modes, package layout, and the HTTP surface. Security details (encryption, CSRF, headers, TLS policy) are in [docs/security.md](docs/security.md). To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ```
 agent  --443/HTTPS-->  https://mcp.openmail.tools/mcp  --993/465/587-->  mailbox provider

@@ -1,3 +1,4 @@
+export { isPrivateAddress, resolveConnectTarget, type ConnectTarget, type Resolver as AddressResolver } from "./address-guard.js";
 export { BODY_CHAR_CAP, THREAD_CHAR_CAP, UNTRUSTED_CONTENT_WARNING } from "./constants.js";
 export { encodeCursor, decodeCursor, type CursorPayload } from "./cursor.js";
 export { normalizeDate, type NormalizedDate } from "./dates.js";

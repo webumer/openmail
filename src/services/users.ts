@@ -94,3 +94,21 @@ export async function verifyPassword(
   }
   return { id: row.id, email: row.email };
 }
+
+/**
+ * Deletes a user and everything that belongs to them: sessions, API keys
+ * (so their bearer tokens stop working at once) and mail accounts with
+ * their encrypted passwords. The wrapped data key goes with the row.
+ */
+export function remove(db: Database, userId: string): { accounts: number; keys: number; sessions: number } {
+  const id = userId;
+  const run = db.transaction(() => {
+    const sessions = db.prepare("DELETE FROM sessions WHERE user_id = ?").run(id).changes;
+    const keys = db.prepare("DELETE FROM api_keys WHERE user_id = ?").run(id).changes;
+    const accounts = db.prepare("DELETE FROM mail_accounts WHERE user_id = ?").run(id).changes;
+    const deleted = db.prepare("DELETE FROM users WHERE id = ?").run(id).changes;
+    if (deleted !== 1) throw new MailError("not_found", "User was not found");
+    return { accounts, keys, sessions };
+  });
+  return run();
+}

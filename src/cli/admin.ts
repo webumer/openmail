@@ -28,6 +28,7 @@ export const USAGE = `Usage: admin <command> [options]
                 --preset custom --imap-host <h> --imap-port <p> --plain
                                                             only for a host in OPENMAIL_INSECURE_IMAP_HOSTS
   import-key    --user <login email> --name <key name>      existing key on stdin
+  delete-user   --email <login email> --yes                 removes the user, sessions, keys, mailboxes
 
 Environment: OPENMAIL_MASTER_KEY, OPENMAIL_DB_PATH, OPENMAIL_INSECURE_IMAP_HOSTS.`;
 
@@ -165,6 +166,16 @@ export async function runAdmin(argv: readonly string[], deps: AdminDeps, io: Adm
       const token = await io.readSecret();
       const imported = apiKeys.importToken(deps.db, { userId, name: text("name"), token });
       io.out(`imported key ${imported.name} ${imported.id}`);
+      return;
+    }
+    case "delete-user": {
+      if (flags.get("yes") !== true) throw new MailError("invalid_input", "delete-user needs --yes");
+      const email = text("email");
+      const userId = userIdFor(deps.db, email);
+      const removed = users.remove(deps.db, userId);
+      io.out(
+        `deleted user ${email.trim().toLowerCase()} ${userId} (accounts=${removed.accounts} keys=${removed.keys} sessions=${removed.sessions})`,
+      );
       return;
     }
     default:

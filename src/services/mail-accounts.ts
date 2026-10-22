@@ -13,6 +13,9 @@ import {
   requireMailboxPassword,
 } from "./validate.js";
 
+/** Keeps one account from storing unbounded rows or fanning out unbounded IMAP logins. */
+export const MAX_MAIL_ACCOUNTS_PER_USER = 25;
+
 export interface NewMailAccount {
   userId: string;
   name: string;
@@ -60,6 +63,10 @@ export function add(db: Database, masterKey: Buffer, input: NewMailAccount): Mai
     | { wrapped_data_key: Buffer }
     | undefined;
   if (!user) throw new MailError("not_found", "User was not found");
+  const count = db.prepare("SELECT COUNT(*) AS n FROM mail_accounts WHERE user_id = ?").get(userId) as { n: number };
+  if (count.n >= MAX_MAIL_ACCOUNTS_PER_USER) {
+    throw new MailError("limit_reached", `You can add up to ${MAX_MAIL_ACCOUNTS_PER_USER} mail accounts`);
+  }
 
   const id = randomUUID();
   const dataKey = unwrapDataKey(masterKey, userId, asBuffer(user.wrapped_data_key));

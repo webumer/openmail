@@ -5,7 +5,11 @@ import { applySecurityHeaders, type SecurityHeaderOptions } from "../web/headers
 import { createMailMcpServer, DEFAULT_USER_ID } from "../tools/register.js";
 import type { CredentialStore } from "../store/types.js";
 import { authorizeRequest } from "./auth.js";
+import { clientAddress } from "../web/request.js";
 import { SlidingWindowRateLimit } from "./rate-limit.js";
+
+/** Failed bearer-token attempts per client address per minute before 429. */
+export const AUTH_FAILURE_LIMIT = 30;
 
 export const BODY_LIMIT_BYTES = 1024 * 1024;
 
@@ -31,6 +35,8 @@ export interface OpenMailServerOptions {
   /** Resolves a bearer token to a user. Multi-user mode passes a database lookup. */
   authenticate?: RequestAuthenticator;
   rateLimit?: { limit: number; windowMs: number };
+  /** Failed-authentication budget per client address. */
+  authFailureLimit?: { limit: number; windowMs: number };
   bodyLimitBytes?: number;
   /** Multi-user setup UI on the same origin as `/mcp` and `/healthz`. */
   web?: WebRequestHandler;
@@ -40,6 +46,10 @@ export interface OpenMailServerOptions {
 
 export function createOpenMailServer(options: OpenMailServerOptions): Server {
   const limiter = new SlidingWindowRateLimit(options.rateLimit?.limit ?? 60, options.rateLimit?.windowMs ?? 60_000);
+  const failures = new SlidingWindowRateLimit(
+    options.authFailureLimit?.limit ?? AUTH_FAILURE_LIMIT,
+    options.authFailureLimit?.windowMs ?? 60_000,
+  );
   const bodyLimit = options.bodyLimitBytes ?? BODY_LIMIT_BYTES;
   const authenticate =
     options.authenticate ?? staticAuthenticator(options.apiKeyHashes ?? [], options.userId ?? DEFAULT_USER_ID);
@@ -48,6 +58,7 @@ export function createOpenMailServer(options: OpenMailServerOptions): Server {
     void handle(req, res, {
       authenticate,
       limiter,
+      failures,
       bodyLimit,
       store: options.store,
       imap: options.imap,
@@ -82,6 +93,7 @@ export function listenOn(server: Server, port: number, host: string): Promise<{ 
 interface HandlerDeps {
   authenticate: RequestAuthenticator;
   limiter: SlidingWindowRateLimit;
+  failures: SlidingWindowRateLimit;
   bodyLimit: number;
   store: CredentialStore;
   imap: ImapGateway;
@@ -123,6 +135,18 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: Handle
   const principal = await options.authenticate(req.headers.authorization);
   if (!principal) {
     drain(req);
+    // Keys are 240-bit random, so guessing is hopeless; this only stops a
+    // client from hammering the key lookup.
+    const address = clientAddress(req, options.security.trustProxy === true);
+    if (!options.failures.allow(`mcp-auth:${address}`)) {
+      writeJson(
+        res,
+        429,
+        { ok: false, error: { code: "rate_limited", message: "Too many requests" } },
+        { "retry-after": "60" },
+      );
+      return;
+    }
     writeJson(
       res,
       401,

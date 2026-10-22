@@ -7,6 +7,9 @@ import { requireId, requireLabel } from "./validate.js";
 /** Skip last_used_at writes that are more frequent than this. */
 export const API_KEY_TOUCH_INTERVAL_MS = 60_000;
 
+/** Active (not revoked) keys per user. Revoke one to create another. */
+export const MAX_ACTIVE_KEYS_PER_USER = 25;
+
 const DUMMY_KEY_HASH = createHash("sha256").update("openmail-unknown-api-key").digest();
 
 export interface CreatedApiKey {
@@ -42,6 +45,12 @@ export function create(db: Database, input: { userId: string; name: string }): C
   const name = requireLabel(input.name, "Key name");
   const user = db.prepare("SELECT id FROM users WHERE id = ?").get(userId);
   if (!user) throw new MailError("not_found", "User was not found");
+  const active = db
+    .prepare("SELECT COUNT(*) AS n FROM api_keys WHERE user_id = ? AND revoked_at IS NULL")
+    .get(userId) as { n: number };
+  if (active.n >= MAX_ACTIVE_KEYS_PER_USER) {
+    throw new MailError("limit_reached", `You can have up to ${MAX_ACTIVE_KEYS_PER_USER} active API keys; revoke one first`);
+  }
   const generated = generateApiKey();
   const id = randomUUID();
   const createdAt = new Date().toISOString();

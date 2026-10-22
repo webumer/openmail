@@ -20,7 +20,7 @@ export function wrapDataKey(masterKey: Buffer, userId: string, dataKey: Buffer):
   assertAesKey(dataKey);
   assertLabel(userId, "userId");
   const iv = randomBytes(GCM_IV_BYTES);
-  const cipher = createCipheriv("aes-256-gcm", masterKey, iv);
+  const cipher = createCipheriv("aes-256-gcm", masterKey, iv, { authTagLength: GCM_TAG_BYTES });
   cipher.setAAD(userAad(userId));
   const ciphertext = Buffer.concat([cipher.update(dataKey), cipher.final()]);
   const tag = cipher.getAuthTag();
@@ -37,7 +37,7 @@ export function unwrapDataKey(masterKey: Buffer, userId: string, wrapped: Buffer
   const tag = wrapped.subarray(GCM_IV_BYTES, GCM_IV_BYTES + GCM_TAG_BYTES);
   const ciphertext = wrapped.subarray(GCM_IV_BYTES + GCM_TAG_BYTES);
   try {
-    const decipher = createDecipheriv("aes-256-gcm", masterKey, iv);
+    const decipher = createDecipheriv("aes-256-gcm", masterKey, iv, { authTagLength: GCM_TAG_BYTES });
     decipher.setAAD(userAad(userId));
     decipher.setAuthTag(tag);
     const dataKey = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
@@ -53,7 +53,7 @@ export function sealPassword(dataKey: Buffer, accountId: string, password: strin
   assertAesKey(dataKey);
   assertLabel(accountId, "accountId");
   const iv = randomBytes(GCM_IV_BYTES);
-  const cipher = createCipheriv("aes-256-gcm", dataKey, iv);
+  const cipher = createCipheriv("aes-256-gcm", dataKey, iv, { authTagLength: GCM_TAG_BYTES });
   cipher.setAAD(accountAad(accountId));
   const ciphertext = Buffer.concat([cipher.update(password, "utf8"), cipher.final()]);
   return { iv, tag: cipher.getAuthTag(), ciphertext };
@@ -66,7 +66,7 @@ export function openPassword(dataKey: Buffer, accountId: string, sealed: SealedS
     throw new Error("Decryption failed");
   }
   try {
-    const decipher = createDecipheriv("aes-256-gcm", dataKey, sealed.iv);
+    const decipher = createDecipheriv("aes-256-gcm", dataKey, sealed.iv, { authTagLength: GCM_TAG_BYTES });
     decipher.setAAD(accountAad(accountId));
     decipher.setAuthTag(sealed.tag);
     return Buffer.concat([decipher.update(sealed.ciphertext), decipher.final()]).toString("utf8");

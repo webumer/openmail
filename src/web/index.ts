@@ -2,6 +2,7 @@ export { resolveSecureCookies, SESSION_COOKIE, CSRF_COOKIE } from "./cookies.js"
 export {
   CONTENT_SECURITY_POLICY,
   HSTS_VALUE,
+  PERMISSIONS_POLICY,
   applySecurityHeaders,
   type SecurityHeaderOptions,
 } from "./headers.js";
