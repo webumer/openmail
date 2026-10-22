@@ -7,11 +7,17 @@ declare module "better-sqlite3" {
     run(...params: SqlValue[]): { changes: number; lastInsertRowid: number | bigint };
   }
 
+  interface Transaction<T> {
+    (): T;
+    /** BEGIN IMMEDIATE, so the body holds the write lock from the start. */
+    immediate(): T;
+  }
+
   class Database {
-    constructor(filename: string);
+    constructor(filename: string, options?: { verbose?: (sql: string) => void });
     prepare<T = unknown>(sql: string): Statement<T>;
     exec(sql: string): this;
-    transaction<T>(fn: () => T): () => T;
+    transaction<T>(fn: () => T): Transaction<T>;
     pragma(source: string, options?: { simple?: boolean }): unknown;
     close(): this;
   }
