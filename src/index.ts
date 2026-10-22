@@ -34,7 +34,7 @@ import {
 import { createWebHandler, resolveSecureCookies } from "./web/index.js";
 import { createSmtpGateway } from "./mail/smtp-gateway.js";
 import { parseInsecureImapHosts, parseInsecureSmtpHosts } from "./mail/tls.js";
-import { createMemorySendRecorder, createSqliteSendRecorder, pruneSendLog } from "./services/send-log.js";
+import { createMemorySendRecorder, createSqliteSendRecorder, interruptStaleSends, pruneSendLog } from "./services/send-log.js";
 import { demoConfigFromEnv, reseedIntervalFromEnv, startDemoSeeder } from "./demo/seed.js";
 import { bearerChallenge, createDocumentFetcher, createOAuthHandler, deriveOAuthConfig } from "./oauth/index.js";
 
@@ -116,6 +116,7 @@ async function listenMulti(config: AppConfig | undefined): Promise<void> {
   const insecureImapHosts = parseInsecureImapHosts(process.env.OPENMAIL_INSECURE_IMAP_HOSTS);
   const insecureSmtpHosts = parseInsecureSmtpHosts(process.env.OPENMAIL_INSECURE_SMTP_HOSTS);
   pruneSendLog(db);
+  interruptStaleSends(db);
   const demo = demoConfigFromEnv(process.env, insecureImapHosts);
   if (demo) startDemoSeeder(demo, reseedIntervalFromEnv(process.env));
   const publicUrl = process.env.OPENMAIL_PUBLIC_URL?.trim() || undefined;

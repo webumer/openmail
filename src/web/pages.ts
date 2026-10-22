@@ -510,7 +510,7 @@ function sendLogSection(rows: SendLogRow[]): string {
 <p><span class="muted">Time (UTC)</span> ${escapeHtml(row.createdAt)}</p>
 <p><span class="muted">Mailbox</span> ${escapeHtml(row.accountLabel)}</p>
 <p><span class="muted">Recipients</span> ${row.recipients}</p>
-<p><span class="muted">Status</span> ${escapeHtml(row.status)}</p>
+<p><span class="muted">Status</span> ${escapeHtml(row.errorCode === "in_progress" ? "in progress" : row.status)}</p>
 <p><span class="muted">Message id</span> ${escapeHtml(row.messageId ?? "—")}</p>
 <p><span class="muted">Via</span> ${escapeHtml(row.via)}</p>
 </li>`,

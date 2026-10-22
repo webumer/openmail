@@ -20,7 +20,15 @@ import { listAccounts } from "../src/mail/operations.js";
 import { findSentFolder, sendMessage, type SendDeps } from "../src/mail/send.js";
 import type { SmtpGateway, SmtpMessage } from "../src/mail/smtp-gateway.js";
 import { buildSmtpConnectOptions } from "../src/mail/tls.js";
-import { createMemorySendRecorder, createSqliteSendRecorder } from "../src/services/send-log.js";
+import Database from "better-sqlite3";
+import {
+  STALE_SEND_MS,
+  createMemorySendRecorder,
+  createSqliteSendRecorder,
+  interruptStaleSends,
+  listSendLog,
+  reserveSend,
+} from "../src/services/send-log.js";
 import { migrate, openDatabase } from "../src/db/index.js";
 import { generateTestMasterKey, loadMasterKey } from "../src/crypto/index.js";
 import { apiKeys, mailAccounts, users } from "../src/services/index.js";
@@ -503,6 +511,44 @@ describe("rate limits and the send log", () => {
     expect(dumped).not.toContain("Secret body");
     expect(dumped).not.toContain("hidden@example.com");
     expect(row.status).toBe("sent");
+    db.close();
+  });
+
+  it("locks the count immediately and keeps unfinished attempts visible", () => {
+    const seen: string[] = [];
+    const db = new Database(":memory:", { verbose: (sql) => seen.push(String(sql)) });
+    migrate(db);
+    db.prepare(
+      `INSERT INTO users (id, email, password_hash, wrapped_data_key, created_at) VALUES (?, ?, ?, ?, ?)`,
+    ).run("user-1", "ada@example.com", "hash", Buffer.from("key"), "2026-01-01T00:00:00.000Z");
+    const now = Date.parse("2026-10-22T12:00:00.000Z");
+    const attempt = {
+      userId: "user-1",
+      accountId: "acct",
+      accountLabel: "Work",
+      recipients: 1,
+      via: "api_key:Laptop",
+    };
+    const limits = { perHour: 2, perDay: 10 };
+    const first = reserveSend(db, attempt, limits, now);
+    expect(first.ok).toBe(true);
+    expect(seen).toContain("BEGIN IMMEDIATE");
+    if (!first.ok) return;
+    expect(listSendLog(db, "user-1")).toEqual([
+      expect.objectContaining({ id: first.id, status: "failed", errorCode: "in_progress", accountLabel: "Work" }),
+    ]);
+
+    db.prepare("UPDATE send_log SET created_at = ? WHERE id = ?").run(new Date(now - STALE_SEND_MS).toISOString(), first.id);
+    interruptStaleSends(db, now);
+    expect(listSendLog(db, "user-1")[0]?.errorCode).toBe("in_progress");
+
+    db.prepare("UPDATE send_log SET created_at = ? WHERE id = ?").run(new Date(now - STALE_SEND_MS - 1).toISOString(), first.id);
+    interruptStaleSends(db, now);
+    expect(listSendLog(db, "user-1")[0]?.errorCode).toBe("interrupted");
+
+    expect(reserveSend(db, attempt, limits, now).ok).toBe(true);
+    const blocked = reserveSend(db, attempt, limits, now);
+    expect(blocked.ok).toBe(false);
     db.close();
   });
 });

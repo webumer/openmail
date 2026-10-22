@@ -4,6 +4,8 @@ import type Database from "better-sqlite3";
 export const SEND_LOG_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 export const HOUR_MS = 60 * 60 * 1000;
 export const DAY_MS = 24 * HOUR_MS;
+/** Reservations older than this at startup were left behind by a crash. */
+export const STALE_SEND_MS = 5 * 60 * 1000;
 
 export interface SendLimits {
   perHour: number;
@@ -61,8 +63,9 @@ export function pruneSendLog(db: Database, now = Date.now()): void {
 }
 
 /**
- * Counts recent attempts and inserts a row in one transaction. The row counts
- * toward the limit immediately, so a second caller cannot pass the same check.
+ * Counts recent attempts and inserts a row in one immediate transaction, so
+ * the count and the insert share a write lock. The row counts toward the
+ * limit immediately, including while it is still in progress.
  */
 export function reserveSend(
   db: Database,
@@ -78,11 +81,17 @@ export function reserveSend(
     db.prepare(
       `INSERT INTO send_log (
          id, user_id, account_id, account_label, created_at, status, recipients, message_id, error_code, via
-       ) VALUES (?, ?, ?, ?, ?, 'failed', ?, NULL, 'pending', ?)`,
+       ) VALUES (?, ?, ?, ?, ?, 'failed', ?, NULL, 'in_progress', ?)`,
     ).run(id, attempt.userId, attempt.accountId, attempt.accountLabel, new Date(now).toISOString(), attempt.recipients, attempt.via);
     return { ok: true, id };
   });
-  return run();
+  return run.immediate();
+}
+
+/** A reservation left in progress for more than 5 minutes did not finish. It still counts. */
+export function interruptStaleSends(db: Database, now = Date.now()): void {
+  const cutoff = new Date(now - STALE_SEND_MS).toISOString();
+  db.prepare("UPDATE send_log SET error_code = 'interrupted' WHERE error_code = 'in_progress' AND created_at < ?").run(cutoff);
 }
 
 export function finishSend(
@@ -115,7 +124,7 @@ export function listSendLog(db: Database, userId: string, limit = 50): SendLogRo
   const rows = db
     .prepare(
       `SELECT id, account_label, created_at, status, recipients, message_id, error_code, via
-       FROM send_log WHERE user_id = ? AND error_code IS NOT 'pending'
+       FROM send_log WHERE user_id = ?
        ORDER BY created_at DESC, id DESC LIMIT ?`,
     )
     .all(userId, limit) as Array<{
@@ -213,7 +222,7 @@ export function createMemorySendRecorder(): SendRecorder {
       const retry = memoryRetry(rows, attempt, limits, now);
       if (retry) return { ok: false, retryAt: new Date(retry).toISOString() };
       const id = randomUUID();
-      rows.push({ ...attempt, id, createdAt: new Date(now).toISOString(), status: "failed", errorCode: "pending" });
+      rows.push({ ...attempt, id, createdAt: new Date(now).toISOString(), status: "failed", errorCode: "in_progress" });
       return { ok: true, id };
     },
     finish(id, status, _messageId, errorCode, recipients) {
