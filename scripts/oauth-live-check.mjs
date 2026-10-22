@@ -173,7 +173,7 @@ const oldRefresh = saved.refresh_token;
 const r1 = await token({ grant_type: "refresh_token", client_id: info.client_id, refresh_token: oldRefresh, resource: MCP });
 check("refresh issues new tokens", r1.status === 200 && r1.body.refresh_token !== oldRefresh);
 check("new access token works", (await mcpStatus(r1.body.access_token)) === 200);
-check("old access token still valid until expiry", (await mcpStatus(saved.access_token)) === 200);
+check("old access token retired by the refresh", (await mcpStatus(saved.access_token)) === 401);
 
 // 4. Revoke (RFC 7009) kills the connection
 const rv = await fetch(`${BASE}/oauth/revoke`, {
@@ -239,8 +239,8 @@ check("login next cannot open-redirect", nextEvil.status === 303 && nextEvil.hea
 // 7. Existing API key (Grok Bot connector) still works
 if (API_KEY_FILE) {
   const key = readFileSync(API_KEY_FILE, "utf8").trim();
-  const ids = await withBearer(key, async (c) => (data(await c.callTool({ name: "list_accounts", arguments: {} })) ?? []).map((a) => a.id));
-  check("API key: list_accounts includes ttt-umer", ids.includes("ttt-umer"), ids.join(","));
+  const ids = await withBearer(key, async (c) => (data(await c.callTool({ name: "list_accounts", arguments: {} })) ?? []).map((a) => a.label ?? a.name));
+  check("API key: list_accounts includes ttt-umer", ids.includes("ttt-umer"), `${ids.length} account(s)`);
 }
 
 console.log(failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`);
