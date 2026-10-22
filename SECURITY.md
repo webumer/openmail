@@ -26,6 +26,8 @@ Only the latest release on `main`, which is what runs at https://mcp.openmail.to
 | Your login password | Argon2id hash only (19 MiB memory, 2 passes) |
 | Session cookie | SHA-256 of a random 256-bit token; expires after 7 days |
 | API keys | SHA-256 of the key only; the key itself is shown once |
+| OAuth codes, access and refresh tokens, client secrets | SHA-256 only. Codes last 5 minutes and work once; access tokens last 1 hour; refresh tokens rotate on every use and last 30 days |
+| OAuth app registrations | App name, redirect URIs and, for apps that identify with a Client ID Metadata Document, a cached copy of that public document |
 | Mailbox settings (host, port, username, address, name) | Plain text |
 | Mailbox passwords | AES-256-GCM, with a per-user data key that is itself wrapped by the server master key (envelope encryption, ids bound as AAD) |
 | Email content | **Not stored.** Messages are fetched from your IMAP server on each request and passed back to your assistant. |
@@ -43,13 +45,14 @@ Logs contain no message content, passwords or keys.
 - *Network attackers.* TLS certificate verification is always on. Plain IMAP is only allowed for operator-configured internal hosts (the reviewer demo mailbox).
 - *Changing your mailbox.* OpenMail is read-only: folders are opened with `EXAMINE` and bodies fetched with `BODY.PEEK`, so messages are never marked as read, moved, flagged or deleted.
 - *Prompt injection through email.* Email content is attacker-controlled. Every tool result is labelled as untrusted third-party content and tool descriptions tell the assistant never to follow instructions inside messages. This reduces the risk; it cannot remove it, so assistants should still ask you before acting on what an email says.
+- *Malicious or impersonating apps (OAuth).* Every connection needs you to log in and click **Allow** on a consent screen that names the app, says whether its identity was verified by its domain (Client ID Metadata Document) or only self-reported (Dynamic Client Registration), and shows where you will be sent back to. PKCE S256 is mandatory, redirect URIs must match a registered one exactly (loopback may differ only in port), codes work once, tokens are bound to `https://mcp.openmail.tools/mcp`, and a reused refresh token revokes the whole connection. The consent page cannot be framed and its form is CSRF-protected. Metadata documents are fetched over https on port 443 only, from public addresses only (pinned, no redirects, 5 s, 32 KB).
 - *Abuse and exhaustion.* Rate limits on login, signup, mailbox tests and API calls; message size caps; IMAP timeouts; per-user caps on mailboxes and keys.
 
 **What is out of scope**
 
 - Someone with root on the server. They can read the master key and decrypt mailbox passwords. Run OpenMail on a host only you control.
 - Your mail provider, or your assistant deciding to act on a malicious email.
-- Someone who has your API key. Treat it like a password and revoke it from the dashboard if it leaks.
+- Someone who has your API key. Treat it like a password and revoke it from the dashboard if it leaks. The same goes for an app you approved: disconnect it under **Connected apps**.
 
 ## Self-hosting checklist
 

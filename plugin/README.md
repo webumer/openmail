@@ -1,6 +1,6 @@
 # OpenMail
 
-Read and search **any IMAP mailbox** from Grok Bot, Cursor, or any MCP client. OpenMail is a hosted, open-source (MIT) remote MCP server at `https://mcp.openmail.tools/mcp`.
+Read and search **any IMAP mailbox** from Grok Bot, Claude, ChatGPT, Cursor, or any MCP client. OpenMail is a hosted, open-source (MIT) remote MCP server at `https://mcp.openmail.tools/mcp`.
 
 - **Provider-agnostic:** works with any IMAP server over TLS. Presets for Migadu, Fastmail, Zoho and iCloud; anything else (Gmail with an app password, self-hosted Dovecot, cPanel hosts) works with manual host settings.
 - **Read-only today:** it never sends, deletes, moves or flags mail, and reading never marks a message as read.
@@ -12,10 +12,9 @@ Read and search **any IMAP mailbox** from Grok Bot, Cursor, or any MCP client. O
 
 1. Open <https://mcp.openmail.tools> and create an account.
 2. **Add a mailbox:** pick a preset or enter IMAP host/port, then your username and password (use an app password where your provider offers one). OpenMail tests the connection before saving. You can add several mailboxes.
-3. **Create an API key.** It is shown once; copy it.
-4. **Connect:**
-   - **Grok Bot:** install OpenMail from the marketplace and paste the key when asked (it is sent as `Authorization: Bearer <key>`).
-   - **Cursor / other MCP clients:** set `OPENMAIL_API_KEY` in your environment; `mcp.json` in this package sends it as the bearer header.
+3. **Connect**, in one of two ways:
+   - **Sign in with OpenMail (OAuth)** — for clients that support MCP sign-in, such as Claude (custom connector), Claude Code, ChatGPT and MCP Inspector. Add `https://mcp.openmail.tools/mcp` as a remote MCP server with no headers. The client opens OpenMail; log in and click **Allow** to grant read-only access. Disconnect any time under **Connected apps** in the dashboard.
+   - **API key** — for Grok Bot and clients that send a fixed header. Create a key in the dashboard (it is shown once), then send it as `Authorization: Bearer <key>`. In Grok Bot, add OpenMail as a custom MCP connector with that header (or install it from the marketplace once it is listed). For Cursor and similar clients, set `OPENMAIL_API_KEY`; `mcp.json` in this package sends it as the bearer header.
 
 ```json
 {
@@ -51,9 +50,9 @@ Example prompts:
 - **Never marks mail as read:** messages are fetched with IMAP `BODY.PEEK`.
 - **No mail content stored:** messages are fetched on demand and not kept on the server or in logs.
 - **Mailbox passwords encrypted at rest** with AES-256-GCM envelope encryption; they are never returned through MCP and never logged.
-- **API keys are hashed** (only a short prefix is kept for display) and can be revoked at any time.
+- **API keys and OAuth tokens are hashed** (only a short key prefix is kept for display). Keys can be revoked and connected apps disconnected at any time. OAuth uses PKCE S256, exact redirect URI matching, one-time codes, 1-hour access tokens and rotating refresh tokens with reuse detection.
 - **Untrusted content:** tool results mark email subjects, headers and bodies as untrusted third-party content so the agent does not follow instructions found inside emails.
-- **Per-user isolation:** an API key only reaches the mailboxes of the account that created it.
+- **Per-user isolation:** an API key or OAuth token only reaches the mailboxes of the account it belongs to.
 
 ## Limits
 
@@ -66,7 +65,7 @@ Example prompts:
 
 | Symptom | Fix |
 |---|---|
-| `401 Unauthorized` | The key is missing, mistyped or revoked. Create a new key and update the connector. |
+| `401 Unauthorized` | API key: the key is missing, mistyped or revoked; create a new key and update the connector. OAuth: the app was disconnected or its sign-in expired; reconnect it from the client. |
 | `429 Too Many Requests` | Wait a minute; you hit the per-key rate limit. |
 | Mailbox fails the connection test | Check host and port (usually 993, SSL/TLS). Use an app password if your provider has 2FA (Gmail, iCloud, Fastmail, Zoho). Make sure IMAP is enabled in your provider's settings. |
 | Outlook.com / Microsoft 365 rejects the password | Microsoft has turned off password (basic auth) IMAP for most accounts; OAuth support is not built yet. |

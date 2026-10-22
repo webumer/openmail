@@ -24,9 +24,23 @@
 - Per-user caps: 25 mail accounts and 25 active API keys.
 - CSP, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Permissions-Policy` and `Cross-Origin-Opener-Policy: same-origin` on all responses. HSTS when the request is HTTPS, `OPENMAIL_PUBLIC_URL` is `https://…`, or (with `OPENMAIL_TRUST_PROXY=1`) `X-Forwarded-Proto: https`.
 
+## OAuth 2.1 (sign in with OpenMail)
+
+- OpenMail is its own authorization server (`src/oauth/`). Enabled only when `OPENMAIL_PUBLIC_URL` is `https://…`; issuer is that origin, resource is `<origin>/mcp`.
+- Discovery: RFC 9728 protected resource metadata (`/.well-known/oauth-protected-resource[/mcp]`), RFC 8414 server metadata (`/.well-known/oauth-authorization-server`). `401` on `/mcp` sends `resource_metadata` and `scope="mail.read"`, plus `error="invalid_token"` when a token was presented.
+- Clients: Client ID Metadata Documents (public clients, `none` only; `private_key_jwt` is refused) and Dynamic Client Registration (`none`, `client_secret_post`, `client_secret_basic`; secrets stored as SHA-256). Registration is limited to 20 per address per hour, 10 redirect URIs, 5,000 registered clients in total; unused registrations are pruned after 7 days.
+- CIMD fetches: `https` on port 443, the URL must equal the document's `client_id` exactly and contain a path without dot segments or query. DNS is resolved once, every address must be public (same blocklist as IMAP hosts), the socket is pinned to the checked address, redirects are not followed, 5 s deadline, 32 KB cap, TLS verified. Documents with a `client_secret` are rejected. Cached 5 to 60 minutes (Cache-Control `max-age`, default 15 min; `no-store` or `max-age=0` for 1 minute). An unknown `redirect_uri` triggers at most one refetch per client per minute; fetches are also limited per host (10/min) and overall (120/min). Network failures all return the same message so the endpoint is not a DNS oracle. Expired cached documents with no live grant are deleted.
+- Authorize: `response_type=code` only; PKCE `S256` required; repeated parameters rejected; `state` ≤ 1,000 characters; `resource` must be the MCP URL (or its origin). An unknown client or unregistered `redirect_uri` shows an error page and never redirects. Other errors redirect with `error`, `state` and `iss`.
+- Redirect URIs: https, or http on `localhost`/`127.0.0.1`/`[::1]` (port may differ, RFC 8252 §7.3). Exact match otherwise. No fragments, userinfo or custom schemes.
+- Consent shows the app name (marked unverified for DCR), the full CIMD document URL, and the exact `redirect_uri`, with a warning when it is a loopback address. Token-endpoint errors use one `invalid_grant` description per grant type.
+- Login: an unauthenticated authorize request goes to `/login?next=…`. `next` is accepted only if it is a path to `/oauth/authorize` on this site, so it cannot become an open redirect.
+- Consent: CSRF token tied to the session, `frame-ancestors 'none'` and `X-Frame-Options: DENY`. The page CSP adds only the callback's origin to `form-action` (browsers apply it to the redirect after the form post). App names are stripped of control and bidi characters and HTML-escaped; DCR names are labelled as unverified; the callback host is always shown; loopback-only apps get an extra warning.
+- Tokens: random 256-bit values with prefixes (`omc_` code, `oma_` access, `omr_` refresh), stored as SHA-256. Code: 5 minutes, single use, bound to client, redirect URI, PKCE challenge and resource; reuse revokes tokens issued from it. Access: 1 hour; a refresh retires the previous access token. Refresh: 30 days, rotated on each use; presenting a rotated one revokes the grant. Revoking a refresh token (RFC 7009) or disconnecting in the dashboard revokes the whole grant.
+- `/mcp` validates OAuth tokens for expiry, revocation, audience (`resource`) and the `mail.read` scope, then applies the same per-user isolation as API keys.
+
 ## MCP
 
-- Bearer token required on `/mcp`. Unknown or revoked key → `401`.
+- Bearer token required on `/mcp` (API key or OAuth access token). Unknown, expired or revoked → `401`.
 - Per-key sliding window (60/min) → `429`. More than 30 failed bearer attempts a minute from one client address → `429`. Bodies over 1 MB → `413`.
 - Resource limits: `read_message` fetches at most 10 MB of a message and `read_thread` at most 1 MB per message (100 messages), always as `BODY.PEEK[]<0.n>` partial fetches; a `has_attachment` search checks at most 2,000 messages; tool string inputs have length limits; IMAP connect/greeting timeouts are 15 s and the socket idle timeout is 60 s.
 - Tools are scoped to the authenticated user. Another user’s account id is `not_found`; IMAP is not contacted.

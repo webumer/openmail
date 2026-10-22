@@ -97,7 +97,34 @@ npm start
 
 `OPENMAIL_CONFIG` selects the config file (default `./config.toml`). `config.toml` is gitignored; `config.example.toml` has placeholders only.
 
-## Connect from Grok Bot
+## Two ways to connect
+
+OpenMail accepts two kinds of bearer token on `/mcp`. Both map to the same OpenMail user and see exactly the same mailboxes.
+
+| | Sign in with OpenMail (OAuth 2.1) | API key |
+|---|---|---|
+| For | Clients that support MCP authorization: Claude (custom connectors, Claude Code), ChatGPT, MCP Inspector, Muse, … | Grok Bot and clients that send a fixed header |
+| Setup | Add the MCP URL only. The client opens OpenMail, you log in and click **Allow** | Create a key in the dashboard and send `Authorization: Bearer <key>` |
+| Token | Opaque access token, 1 hour, refreshed automatically (refresh tokens rotate) | Long-lived until you revoke it |
+| Revoke | Dashboard → **Connected apps** → Disconnect | Dashboard → **API keys** → Revoke |
+
+### OAuth details
+
+OpenMail is its own authorization server on the same origin, following the [MCP authorization spec](https://modelcontextprotocol.io/specification/draft/basic/authorization):
+
+- `401` from `/mcp` carries `WWW-Authenticate: Bearer resource_metadata="https://mcp.openmail.tools/.well-known/oauth-protected-resource/mcp", scope="mail.read"`.
+- Protected Resource Metadata (RFC 9728): `/.well-known/oauth-protected-resource` and `/.well-known/oauth-protected-resource/mcp`. Resource: `https://mcp.openmail.tools/mcp`.
+- Authorization Server Metadata (RFC 8414): `/.well-known/oauth-authorization-server`. Issuer: `https://mcp.openmail.tools`.
+- Client registration: Client ID Metadata Documents (`client_id_metadata_document_supported: true`, public clients with `none`) and Dynamic Client Registration (RFC 7591) at `/oauth/register`.
+- `/oauth/authorize`: authorization code with **PKCE S256 required**, `state`, exact `redirect_uri` matching (https, or http loopback on any port per RFC 8252), `resource` (RFC 8707) bound to the MCP URL, and `iss` in every response (RFC 9207).
+- `/oauth/token`: code exchange and refresh with rotation and reuse detection (reusing a refresh token revokes the whole connection). `/oauth/revoke` (RFC 7009).
+- One scope, `mail.read`, covering all five read-only tools.
+
+Redirect URIs known to work: `https://claude.ai/api/mcp/auth_callback`, Claude Code loopback (`http://localhost:<port>/callback`), ChatGPT (`https://chatgpt.com/connector_platform_oauth_redirect`, via its CIMD document), MCP Inspector (`http://localhost:6274/oauth/callback`). Custom URL schemes (for example `cursor://`) are not accepted yet.
+
+OAuth is enabled when `OPENMAIL_PUBLIC_URL` is an `https://` URL. For OpenAI domain verification, set `OPENMAIL_OPENAI_CHALLENGE` to the token OpenAI gives you; it is served at `/.well-known/openai-apps-challenge`.
+
+### API key (Grok Bot)
 
 Add a streamable HTTP MCP server:
 
@@ -120,7 +147,7 @@ npm start
 
 `npm run dev` reloads `src/index.ts` while you edit. Default listen address is `127.0.0.1:8080` (override with `[server]` in config when present).
 
-`GET /healthz` does not require a key. Every `/mcp` request must send `Authorization: Bearer <key>`. Unknown or revoked keys are `401`. Each accepted key is limited to 60 requests per minute (`429`). Request bodies over 1 MB are rejected (`413`).
+`GET /healthz` does not require a key. Every `/mcp` request must send `Authorization: Bearer <API key or OAuth access token>`. Unknown or revoked keys are `401`. Each accepted key is limited to 60 requests per minute (`429`). Request bodies over 1 MB are rejected (`413`).
 
 ## Operator CLI
 
