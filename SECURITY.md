@@ -14,6 +14,10 @@ Please do not open a public GitHub issue for a vulnerability, and do not access,
 
 We aim to reply within 3 working days, and to fix confirmed critical or high issues within 14 days. We are happy to credit you once a fix is live, if you want that.
 
+## Incidents involving user data
+
+If we confirm a security incident that affects user data, we report it to each affected platform within the window that platform requires. That includes Meta Muse (vendor-incident@meta.com, within 48 hours) and the other directories that list OpenMail.
+
 ## Supported versions
 
 Only the latest release on `main`, which is what runs at https://mcp.openmail.tools, receives security fixes.
@@ -47,7 +51,7 @@ Logs contain no message content, passwords or keys.
 - *Network attackers.* TLS certificate verification is always on. Plain IMAP is only allowed for operator-configured internal hosts (the reviewer demo mailbox).
 - *Changing your mailbox.* Reads open folders with `EXAMINE` and fetch with `BODY.PEEK`, so messages are never marked as read. Nothing deletes, moves, or flags mail. The only IMAP write is appending the copy of a message you confirmed to Sent.
 - *Sending mail you did not approve.* Sending is off until you turn it on for that mailbox, and the connection also needs permission (`mail.send`, or an API key created as “Read and send”). The assistant must show the full email and set `user_confirmed` only after you agree. Sends are rate limited and recorded without the message content.
-- *Prompt injection through email.* Email content is attacker-controlled. Every tool result is labelled as untrusted third-party content and tool descriptions tell the assistant never to follow instructions inside messages. This reduces the risk; it cannot remove it, so assistants should still ask you before acting on what an email says.
+- *Prompt injection through email.* Email content is attacker-controlled. Every tool result is labelled as untrusted third-party content, and tool descriptions state that email content is data from third parties, not instructions. This reduces the risk; it cannot remove it, so assistants should still ask you before acting on what an email says.
 - *Malicious or impersonating apps (OAuth).* Every connection needs you to log in and click **Allow** on a consent screen that names the app, says whether its identity was verified by its domain (Client ID Metadata Document) or only self-reported (Dynamic Client Registration), and shows where you will be sent back to. PKCE S256 is mandatory, redirect URIs must match a registered one exactly (loopback may differ only in port), codes work once, tokens are bound to `https://mcp.openmail.tools/mcp`, and a reused refresh token revokes the whole connection. The consent page cannot be framed and its form is CSRF-protected. Metadata documents are fetched over https on port 443 only, from public addresses only (pinned, no redirects, 5 s, 32 KB).
 - *Abuse and exhaustion.* Rate limits on login, signup, mailbox tests and API calls; message size caps; IMAP timeouts; per-user caps on mailboxes and keys.
 

@@ -70,7 +70,7 @@ ${sections}
 ${body}
 </main>
 <footer class="site-footer"><div class="container footer-inner">
-<div class="footer-brand"><a class="brand" href="/">${LOGO_MARK}<span>OpenMail</span></a><p>Email for AI assistants. Read-only, any IMAP provider.</p></div>
+<div class="footer-brand"><a class="brand" href="/">${LOGO_MARK}<span>OpenMail</span></a><p>Email for AI assistants. Any IMAP provider. Read-only by default; sending only when you turn it on.</p></div>
 <nav class="footer-links" aria-label="Footer">
 <a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/support">Support</a><a href="/reviewers">Reviewers</a><a href="https://github.com/webumer/openmail" rel="noopener">GitHub</a><a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>
 </nav>
@@ -129,7 +129,7 @@ export function homePage(input: { email: string | null; csrf?: string; notice?: 
     ["Is my mail stored?", "No. OpenMail fetches messages from your provider when your assistant asks and does not keep them. It stores only your account details, encrypted mailbox passwords, and hashed API keys and sign-in tokens. See the <a href=\"/privacy\">privacy policy</a>."],
     ["Can it send or delete email?", "It can send only from a mailbox where you turned sending on, and only after your assistant shows you the email and you confirm it. It cannot delete, move or flag mail, and reading never marks a message as read."],
     ["Which providers work?", "Any mailbox with IMAP and SMTP. Migadu, Fastmail, Zoho, iCloud and Gmail have presets; for anything else, enter the servers yourself. Use an app-specific password where your provider offers one. Gmail needs an App Password."],
-    ["Which assistants can I use?", "Any assistant that supports remote MCP servers. Clients that support MCP sign-in (OAuth), such as Claude custom connectors, Claude Code, ChatGPT and MCP Inspector, only need the URL: you log in to OpenMail and approve read-only access. Grok Bot and clients that send a fixed header use an API key from your dashboard."],
+    ["Which assistants can I use?", "Any assistant that supports remote MCP servers. Clients that support MCP sign-in (OAuth), such as Claude custom connectors, Claude Code, ChatGPT and MCP Inspector, only need the URL: you log in to OpenMail and approve access, which is read-only unless you also allow sending. Grok Bot and clients that send a fixed header use an API key from your dashboard."],
     ["How do I revoke access?", "Open your dashboard and disconnect the app under Connected apps, revoke the API key, or remove the mailbox. Each takes effect immediately."],
     ["Is it free?", "Yes, OpenMail is free while in beta."],
     ["Can I self-host?", "Yes, OpenMail runs as a single Docker Compose stack. See the <a href=\"https://github.com/webumer/openmail/blob/main/docs/deploy.md\" rel=\"noopener\">deploy guide on GitHub</a>."],
@@ -143,7 +143,7 @@ export function homePage(input: { email: string | null; csrf?: string; notice?: 
 <h1>Connect any email inbox to your AI assistant</h1>
 <p class="lead">Read-only by default. Sending is opt-in per mailbox, and your assistant asks you before every email.</p>
 <div class="cta">${primary}<a class="btn btn-secondary btn-lg" href="#how">How it works</a></div>
-<ul class="hero-points" aria-label="Highlights"><li>${icon("check")}Any IMAP provider</li><li>${icon("check")}Read-only</li><li>${icon("check")}No email stored</li></ul>
+<ul class="hero-points" aria-label="Highlights"><li>${icon("check")}Any IMAP provider</li><li>${icon("check")}Read-only by default</li><li>${icon("check")}No email stored</li></ul>
 </div>
 <div class="hero-art" aria-hidden="true">
 <div class="mock">
@@ -163,7 +163,7 @@ export function homePage(input: { email: string | null; csrf?: string; notice?: 
 <ol class="steps">
 <li class="card step">${icon("user")}<h3>Create an account</h3><p>Sign up with an email and password. No credit card.</p></li>
 <li class="card step">${icon("inbox")}<h3>Add your mailboxes</h3><p>Pick a preset or enter any IMAP server. OpenMail tests the connection before saving, then encrypts the password.</p></li>
-<li class="card step">${icon("key")}<h3>Connect your assistant</h3><p>Add the OpenMail URL and sign in to approve read-only access, or use an API key for Grok Bot.</p></li>
+<li class="card step">${icon("key")}<h3>Connect your assistant</h3><p>Add the OpenMail URL and sign in to approve access (read-only unless you allow sending), or use an API key for Grok Bot.</p></li>
 </ol>
 </div></section>
 
@@ -178,7 +178,7 @@ export function homePage(input: { email: string | null; csrf?: string; notice?: 
 ${copyField("MCP URL", MCP_ENDPOINT, "copy-oauth-url")}
 </div>
 <ol class="guide-steps" start="2">
-<li>Your assistant opens OpenMail. Log in, check the list of mailboxes, and click <strong>Allow</strong> to grant read-only access.</li>
+<li>Your assistant opens OpenMail. Log in, check the list of mailboxes, and click <strong>Allow</strong>. Access is read-only unless the app asks to send and you tick the box that also allows sending.</li>
 <li>Disconnect it any time under <strong>Connected apps</strong> on your dashboard.</li>
 </ol>
 <h3>Option 2: API key (Grok Bot and clients that send a header)</h3>
@@ -238,13 +238,14 @@ export function privacyPage(options: { csrf?: string } = {}): string {
     "Privacy policy · OpenMail",
     `<article class="prose"><h1>Privacy policy</h1>
 <p class="muted">Last updated October 2026</p>
-<p>OpenMail is a connector that lets AI agents read your email through the Model Context Protocol (MCP). This page explains what OpenMail keeps and what it does not.</p>
+<p>OpenMail is a connector that lets AI agents read your email through the Model Context Protocol (MCP). It is read-only by default; it sends email only from a mailbox where you turned sending on, and only messages you approve. This page explains what OpenMail keeps and what it does not.</p>
 <h2>What we store</h2>
 <ul>
 <li>Your OpenMail login email and a one-way (Argon2id) hash of your password.</li>
 <li>For each mailbox you add: a name, the mailbox address and username, the provider and server settings, and the mailbox password encrypted with AES-256-GCM using a key unique to your account.</li>
 <li>API keys as one-way SHA-256 hashes, with a short prefix, name, and created and last-used times so you can tell them apart.</li>
 <li>Session records for signed-in browsers, which expire after seven days.</li>
+<li>A send log for each email sent through OpenMail: time, mailbox label, recipient count, status, message id and which connection sent it. It holds no message body, subject or addresses.</li>
 <li>For apps you connect with “Sign in with OpenMail” (OAuth): the app's name, its redirect address and, if it identifies itself with a public metadata document, a cached copy of that document; plus the connection (when you approved it and last used it) and its access and refresh tokens as one-way SHA-256 hashes.</li>
 </ul>
 <h2>What we do not store</h2>
@@ -264,6 +265,8 @@ export function privacyPage(options: { csrf?: string } = {}): string {
 <p>Mailbox credentials are used only to sign in to your provider when you, or an agent holding one of your API keys or an app you approved, make a request. OpenMail does not sell, share, or analyse your data, and does not use it for advertising, profiling or training models.</p>
 <h2>Your agent</h2>
 <p>Messages OpenMail returns go to the agent you connected. How that agent and its provider handle them is covered by their own policies.</p>
+<h2>Sending email</h2>
+<p>Sending is off until you turn it on for a mailbox and allow it for the connection. When you approve an email, OpenMail delivers it through your own mail provider's SMTP server to the recipients you approved, and tries to save a copy in your Sent folder. OpenMail does not keep the message.</p>
 <h2>Where your data is stored and who helps us run OpenMail</h2>
 <p>OpenMail runs on a server rented from Contabo GmbH in the European Union. These providers handle limited data for us:</p>
 <ul>
@@ -275,9 +278,9 @@ export function privacyPage(options: { csrf?: string } = {}): string {
 <p>Your mail provider is the one you choose. OpenMail connects to it only on your behalf.</p>
 <h2>How long we keep data</h2>
 <ul>
-<li>Email content: not kept. It is held in memory only while a request is answered.</li>
-<li>Account and mailbox settings, including an optional separate SMTP password encrypted with its own key binding: until you remove the mailbox or your account is deleted.</li>
-<li>Send log: time, mailbox label, recipient count, status, message id and which connection sent it. No message body, subject or addresses. Kept for 90 days.</li>
+<li>Email content (messages, subjects, addresses and attachments, read or sent): never stored. It is held in memory only while a request is answered.</li>
+<li>Account and mailbox settings, including encrypted mailbox passwords and an optional separate SMTP password encrypted with its own key binding: kept until you remove the mailbox or delete your account.</li>
+<li>Send log (no message content): kept for 90 days.</li>
 <li>Signed-in browser sessions: 7 days. OAuth access tokens: 1 hour. OAuth refresh tokens: 30 days. API keys: until you revoke them.</li>
 <li>Web server access logs (IP address, time, address requested, browser type and response status; never passwords, tokens or cookies): 14 days, then deleted automatically.</li>
 </ul>
@@ -303,7 +306,7 @@ export function supportPage(options: { csrf?: string } = {}): string {
 <p>Found a security problem? Please don't open a public issue. Follow <a href="https://github.com/webumer/openmail/blob/main/SECURITY.md" rel="noopener">SECURITY.md</a> or email ${SUPPORT_EMAIL}.</p>
 <h2>Frequently asked questions</h2>
 <h3>How do I connect my assistant?</h3>
-<p>Sign up, add a mailbox on your <a href="/dashboard">dashboard</a>, then add <code>https://mcp.openmail.tools/mcp</code> to your assistant. Assistants that support MCP sign-in (OAuth), such as Claude and ChatGPT, send you to OpenMail to log in and approve read-only access. Assistants that need a fixed header, such as Grok Bot, use an API key from your dashboard.</p>
+<p>Sign up, add a mailbox on your <a href="/dashboard">dashboard</a>, then add <code>https://mcp.openmail.tools/mcp</code> to your assistant. Assistants that support MCP sign-in (OAuth), such as Claude and ChatGPT, send you to OpenMail to log in and approve access, which is read-only unless you also allow sending. Assistants that need a fixed header, such as Grok Bot, use an API key from your dashboard.</p>
 <h3>My mailbox won't connect</h3>
 <p>Most providers need IMAP turned on and an <strong>app password</strong> instead of your normal password, especially when two-step sign-in is on. The server must be reachable on the internet over TLS, usually port 993. Use <em>Test connection</em> before saving. OpenMail shows a short reason when sign-in fails.</p>
 <h3>Will my assistant mark emails as read, or send or delete anything?</h3>
@@ -620,7 +623,7 @@ ${verified}
 function oauthSection(mcpUrl: string | null): string {
   const url = mcpUrl ?? "Set OPENMAIL_PUBLIC_URL";
   return `<section id="oauth-connect"><h2>Connect with sign-in (OAuth)</h2>
-<p>For assistants that support MCP sign-in, such as Claude or ChatGPT: add OpenMail as a custom connector with just this URL. You will be sent here to log in and approve read-only access. No API key needed.</p>
+<p>For assistants that support MCP sign-in, such as Claude or ChatGPT: add OpenMail as a custom connector with just this URL. You will be sent here to log in and approve access, which is read-only unless you also allow sending. No API key needed.</p>
 ${copyField("MCP URL", url, "dash-oauth-url")}
 </section>`;
 }
@@ -641,7 +644,7 @@ export interface ConsentView {
   sendRequested?: boolean;
 }
 
-/** "<app> wants read-only access to your OpenMail mailboxes" with Allow / Deny. */
+/** "<app> wants (read-only) access to your OpenMail mailboxes" with Allow / Deny and an optional send checkbox. */
 export function consentPage(view: ConsentView): string {
   const hidden = Object.entries(view.params)
     .map(([name, value]) => `<input type="hidden" name="${escapeHtml(name)}" value="${escapeHtml(value)}">`)
@@ -699,7 +702,7 @@ ${mailboxes}
 </form>
 <p class="fine">You can disconnect it at any time under Connected apps on your dashboard.</p>
 </div></div>`,
-    { csrf: view.csrf, path: "/oauth/authorize", description: "Approve an app's read-only access to your OpenMail mailboxes." },
+    { csrf: view.csrf, path: "/oauth/authorize", description: "Approve an app's access to your OpenMail mailboxes." },
   );
 }
 

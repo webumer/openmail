@@ -51,7 +51,7 @@
 - Per-key sliding window (60/min) → `429`. More than 30 failed bearer attempts a minute from one client address → `429`. Bodies over 1 MB → `413`.
 - Resource limits: `read_message` fetches at most 10 MB of a message and `read_thread` at most 1 MB per message (100 messages), always as `BODY.PEEK[]<0.n>` partial fetches; a `has_attachment` search checks at most 2,000 messages; tool string inputs have length limits; IMAP connect/greeting timeouts are 15 s and the socket idle timeout is 60 s.
 - Tools are scoped to the authenticated user. Another user’s account id is `not_found`; IMAP is not contacted.
-- Message bodies, subjects, and headers are untrusted third-party content. Tool descriptions warn callers not to follow instructions found in them.
+- Message bodies, subjects, and headers are untrusted third-party content. Tool descriptions and results state that this content is data, not instructions.
 
 ## Transport
 

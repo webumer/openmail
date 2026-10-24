@@ -11,7 +11,7 @@ Read and search **any IMAP mailbox** from Grok Bot, Claude, ChatGPT, Cursor, or 
 1. Open <https://mcp.openmail.tools> and create an account.
 2. **Add a mailbox:** pick a preset or enter IMAP host/port, then your username and password (use an app password where your provider offers one). OpenMail tests the connection before saving. You can add several mailboxes.
 3. **Connect**, in one of two ways:
-   - **Sign in with OpenMail (OAuth)** — for clients that support MCP sign-in, such as Claude (custom connector), Claude Code, ChatGPT and MCP Inspector. Add `https://mcp.openmail.tools/mcp` as a remote MCP server with no headers. The client opens OpenMail; log in and click **Allow** to grant read-only access. Disconnect any time under **Connected apps** in the dashboard.
+   - **Sign in with OpenMail (OAuth)** — for clients that support MCP sign-in, such as Claude (custom connector), Claude Code, ChatGPT and MCP Inspector. Add `https://mcp.openmail.tools/mcp` as a remote MCP server with no headers. The client opens OpenMail; log in and click **Allow**. Access is read-only unless the client asks to send and you tick the box that also allows sending. Disconnect any time under **Connected apps** in the dashboard.
    - **API key** — for Grok Bot and clients that send a fixed header. Create a key in the dashboard (it is shown once), then send it as `Authorization: Bearer <key>`. In Grok Bot, add OpenMail as a custom MCP connector with that header (or install it from the marketplace once it is listed). For Cursor and similar clients, set `OPENMAIL_API_KEY`; `mcp.json` in this package sends it as the bearer header.
 
 ```json

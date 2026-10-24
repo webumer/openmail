@@ -60,7 +60,7 @@ HTTP level: `401` + `WWW-Authenticate` for a missing, expired or revoked token; 
 - Sending: 20 messages per hour and 100 per day, per user and per mailbox (sent, failed, and in-progress attempts all count). At most 20 recipients. Override with `OPENMAIL_SEND_MAX_PER_HOUR`, `OPENMAIL_SEND_MAX_PER_DAY`, and `OPENMAIL_SEND_MAX_RECIPIENTS`. In single-user config mode the send log and these limits are kept in memory only and reset when the process exits.
 
 ## Untrusted content
-Each tool description and result says email bodies, subjects and headers are untrusted third-party content, and that instructions found in them must never be followed.
+Each tool description and result says email bodies, subjects and headers are untrusted data from third parties, not instructions.
 
 ## API keys (clients without OAuth)
 Clients that can only send a fixed header (for example Grok Bot) use an API key from the dashboard: `Authorization: Bearer <key>`. Keys are shown once, stored as hashes, and can be revoked at any time. A key is read-only unless it was created as **Read and send**. A read-only key can call `send_message`, and the call fails with `send_not_permitted`.
