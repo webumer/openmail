@@ -1,5 +1,8 @@
 import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { createSystemMailer } from "./services/system-mailer.js";
+import { prunePasswordResets } from "./services/password-resets.js";
+import { createMetricRecorder, noopMetrics, pruneMetrics } from "./services/metrics.js";
 import { loadMasterKey } from "./crypto/index.js";
 import {
   loadConfig,
@@ -11,7 +14,7 @@ import {
   type ServerConfig,
 } from "./config/index.js";
 import { migrate, openDatabase, resolveDatabasePath } from "./db/index.js";
-import { MailError } from "./errors.js";
+import { MailError, operatorErrorText } from "./errors.js";
 import {
   createImapGateway,
   listAccounts,
@@ -65,8 +68,7 @@ export { createWebHandler, resolveSecureCookies };
 const invoked = process.argv[1];
 if (invoked && import.meta.url === pathToFileURL(invoked).href) {
   start().catch((err: unknown) => {
-    if (err instanceof MailError || err instanceof Error) console.error(err.message);
-    else console.error("OpenMail failed to start");
+    console.error(operatorErrorText(err, "OpenMail failed to start"));
     process.exit(1);
   });
 }
@@ -96,6 +98,7 @@ async function listenSingle(config: AppConfig): Promise<void> {
     imap: createImapGateway(),
     smtp: createSmtpGateway(),
     sends: createMemorySendRecorder(),
+    metrics: noopMetrics,
     apiKeyHashes,
     ...(publicUrl ? { publicUrl } : {}),
     security: {
@@ -111,6 +114,9 @@ async function listenMulti(config: AppConfig | undefined): Promise<void> {
   const masterKey = loadMasterKey(process.env.OPENMAIL_MASTER_KEY);
   const db = openDatabase(resolveDatabasePath(process.env));
   migrate(db);
+  pruneMetrics(db);
+  prunePasswordResets(db);
+  const metrics = createMetricRecorder(db);
   const allowInsecureLocalhost =
     process.env.OPENMAIL_ALLOW_INSECURE_LOCALHOST === "1" || config?.allowInsecureLocalhost === true;
   const insecureImapHosts = parseInsecureImapHosts(process.env.OPENMAIL_INSECURE_IMAP_HOSTS);
@@ -125,6 +131,8 @@ async function listenMulti(config: AppConfig | undefined): Promise<void> {
   const imap = createImapGateway();
   const smtp = createSmtpGateway();
   const web = createWebHandler({
+    metrics,
+    systemMailer: createSystemMailer(),
     db,
     masterKey,
     imap,
@@ -154,6 +162,7 @@ async function listenMulti(config: AppConfig | undefined): Promise<void> {
     imap,
     smtp,
     sends: createSqliteSendRecorder(db),
+    metrics,
     ...(publicUrl ? { publicUrl } : {}),
     authenticate: (header) => authenticateDatabaseKey(db, header, oauthConfig?.resource),
     web: oauth ? async (req, res) => (await oauth(req, res)) || (await web(req, res)) : web,

@@ -280,7 +280,7 @@ describe("web setup app", () => {
     const internal = await submit("10.1.2.3");
     expect(internal.status).toBe(400);
     const internalHtml = await readHtml(internal);
-    expect(internalHtml).toContain("public internet address");
+    expect(internalHtml).toContain("Use a public mail server address");
     expect(internalHtml).not.toContain("mailbox-secret-value");
     const badPort = await submit("198.51.100.7", "22");
     expect(badPort.status).toBe(400);

@@ -9,8 +9,10 @@ import {
   type SearchObject,
   type StatusObject,
 } from "imapflow";
+import { imapTimeoutFromEnv } from "../config/runtime.js";
+import { createDeadline, type Deadline } from "./deadline.js";
 import type { AccountCredentials } from "../store/types.js";
-import { toMailError } from "../errors.js";
+import { MailError, toMailError } from "../errors.js";
 import { buildImapConnectOptions } from "./tls.js";
 import { defaultResolver, resolveConnectTarget, type Resolver } from "./address-guard.js";
 import { parseThreadResponse, threadContaining } from "./thread.js";
@@ -63,6 +65,9 @@ interface ImapClient {
 export interface ImapGatewayOptions {
   /** DNS lookup used to pin each connection to a checked public address. Tests inject one. */
   resolve?: Resolver;
+  /** Small injected values are allowed for deterministic tests. */
+  timeoutMs?: number;
+  graceMs?: number;
 }
 
 export function createImapGateway(
@@ -70,12 +75,14 @@ export function createImapGateway(
   gatewayOptions: ImapGatewayOptions = {},
 ): ImapGateway {
   const resolve = gatewayOptions.resolve ?? defaultResolver;
+  const timeoutMs = gatewayOptions.timeoutMs ?? imapTimeoutFromEnv();
+  const graceMs = gatewayOptions.graceMs ?? 5_000;
   return {
     withClient(account, fn) {
-      return run(factory, resolve, account, async (session) => fn(session));
+      return run(factory, resolve, timeoutMs, graceMs, account, async (session) => fn(session));
     },
     withMailbox(account, folder, fn) {
-      return run(factory, resolve, account, async (session, client) => {
+      return run(factory, resolve, timeoutMs, graceMs, account, async (session, client) => {
         const lock = await client.getMailboxLock(folder, { readOnly: true });
         try {
           return await fn(session);
@@ -85,7 +92,7 @@ export function createImapGateway(
       });
     },
     appendMessage(account, folder, raw, flags) {
-      return run(factory, resolve, account, async (_session, client) => {
+      return run(factory, resolve, timeoutMs, graceMs, account, async (_session, client) => {
         if (!client.append) throw new Error("APPEND is not available");
         await client.append(folder, raw, flags);
       });
@@ -94,38 +101,75 @@ export function createImapGateway(
 }
 
 function defaultClient(options: ImapFlowOptions): ImapClient {
-  return new ImapFlow(options) as unknown as ImapClient;
+  const client = new ImapFlow(options);
+  client.on("error", () => { /* The operation promise reports a sanitized error. */ });
+  return client as unknown as ImapClient;
 }
 
 async function run<T>(
   factory: (options: ImapFlowOptions) => ImapClient,
   resolve: Resolver,
+  timeoutMs: number,
+  graceMs: number,
   account: AccountCredentials,
   fn: (session: ImapSession, client: ImapClient) => Promise<T>,
 ): Promise<T> {
-  // Transport rules first (no DNS for a refused cleartext host), then pin the
-  // socket to an address checked just now, so DNS cannot move it to a private one.
-  const options = buildImapConnectOptions(account);
-  const target = await resolveConnectTarget(account, resolve);
-  options.host = target.host;
-  if (target.servername) options.servername = target.servername;
-  const client = factory(options);
-  try {
-    await client.connect();
-  } catch (err) {
-    safeClose(client);
-    throw toMailError(err, account.password);
-  }
-  try {
-    return await fn(createSession(client), client);
-  } catch (err) {
-    throw toMailError(err, account.password);
-  } finally {
-    try {
-      await client.logout();
-    } catch {
+  const deadline = createDeadline({ timeoutMs });
+  let client: ImapClient | undefined;
+  let closed = false;
+  const close = () => {
+    if (client && !closed) {
+      closed = true;
       safeClose(client);
     }
+  };
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = () => new MailError("timeout", "The mail server took too long. Try a narrower search or try again later.", "timeout");
+  const work = async (): Promise<T> => {
+    try {
+      const options = buildImapConnectOptions(account);
+      const target = await resolveConnectTarget(account, resolve);
+      if (timedOut) throw timeout();
+      options.host = target.host;
+      if (target.servername) options.servername = target.servername;
+      client = factory(options);
+      await client.connect();
+      if (timedOut) throw timeout();
+      return await fn(createSession(client, deadline), client);
+    } catch (err) {
+      close();
+      throw toMailError(err, account.password);
+    } finally {
+      if (client && !closed) {
+        if (timedOut) close();
+        else {
+          try {
+            await client.logout();
+          } catch {
+            close();
+          }
+        }
+      }
+    }
+  };
+  const working = work();
+  // The socket may reject pending work after the hard timeout has already returned.
+  void working.catch(() => {});
+  try {
+    return await Promise.race([
+      working,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          timedOut = true;
+          // Reject first, so any synchronous close-induced error cannot replace timeout.
+          reject(timeout());
+          close();
+        }, timeoutMs + graceMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -137,7 +181,7 @@ function safeClose(client: ImapClient): void {
   }
 }
 
-function createSession(client: ImapClient): ImapSession {
+function createSession(client: ImapClient, deadline: Deadline): ImapSession {
   const capabilities = new Set<string>();
   for (const key of client.capabilities.keys()) {
     capabilities.add(key);
@@ -145,6 +189,7 @@ function createSession(client: ImapClient): ImapSession {
   }
   const session: ImapSession = {
     capabilities,
+    deadline,
     async list() {
       const entries = await client.list({ statusQuery: { messages: true, unseen: true } });
       return entries.map(mapListed);

@@ -2,7 +2,7 @@
 
 Reference for assistants, marketplace reviewers and self-hosters: setup, permissions, every tool's inputs and outputs, read/write classification, side effects, errors and limits.
 
-Endpoint: https://mcp.openmail.tools/mcp (MCP streamable HTTP). Server name `openmail`, version 0.4.0.
+Endpoint: https://mcp.openmail.tools/mcp (MCP streamable HTTP). Server name `openmail`, version 0.5.0.
 
 ## Setup
 1. Create an OpenMail account at https://openmail.tools and add a mailbox (provider preset or custom IMAP host, port 993 TLS, username and app password). OpenMail tests the login before saving.
@@ -44,18 +44,22 @@ Tool results are JSON: `{"ok": true, "data": ..., "truncated": bool, "warnings":
 | `invalid_argument` / `invalid_input` | Bad parameter (wrong type, too long, bad date) |
 | `invalid_cursor` | The paging cursor is stale or malformed; search again without it |
 | `imap_error` | The provider refused or failed. Messages are generic: "Could not reach…", "TLS verification failed…", "IMAP sign-in failed" |
+| `timeout` | The whole IMAP operation exceeded its work budget plus grace period; retry with a narrower search |
 | `smtp_error` | SMTP failed. One of: "Could not reach the SMTP server", "SMTP sign-in failed", "TLS verification failed for the SMTP server", "The SMTP server rejected the message" |
 | `send_not_permitted` | This connection is read-only |
 | `sending_disabled` | Sending is turned off for that mailbox |
 | `rate_limited` | The user or mailbox is over the send limit. The message says when to retry |
 | `config_error` | The mailbox settings are unusable (e.g. host not a public address) |
 | `limit_reached` | Per-user cap (25 mailboxes / 25 keys); dashboard only |
+When the authenticated user has **zero mailboxes**, every tool returns `isError: false` and a successful result with `setup_required: true`, a plain-text `message`, and `dashboard_url` when a public URL is configured. Add a mailbox using **Add mailbox** at that dashboard, then retry. Empty data is `[]` for list tools, `{messages: [], next_cursor: null}` for search, `null` for reads, and `{sent: false}` for send; the send message explicitly states **nothing was sent**. With mailboxes present, an unknown account id still returns `not_found`.
+
 HTTP level: `401` + `WWW-Authenticate` for a missing, expired or revoked token; `429` with `Retry-After: 60` when rate limited; `413` for a body over 1 MB.
 
 ## Rate limits and size caps
-- 60 requests per minute per credential; 30 failed authentications per minute per client address.
+- 90 requests per minute per credential in a sliding 60-second window (a burst of 90 is allowed); configurable with `OPENMAIL_RATE_LIMIT_PER_MINUTE` (integer 1–10000); 30 failed authentications per minute per client address.
 - search_messages: `limit` 1–50 (default 20), paged with `next_cursor`; attachment filter scans at most 2,000 messages.
 - read_message: fetches at most 10 MB; body text capped at 20,000 characters. read_thread: 1 MB per message, 40,000 characters combined.
+- Search and thread work have a 25 s cooperative budget (`OPENMAIL_IMAP_OP_TIMEOUT_MS`, integer 5000–120000 ms). Slow operations return available results with `truncated: true` and a warning to narrow by date, folder or sender. The first search page and the requested thread message are fetched even if discovery exhausts the cooperative budget; later fetch batches check the deadline. Search supplies `next_cursor` when a safe resume boundary is known, including attachment and address fallback scans, and every UID cursor advances to a strictly older boundary. A blocked command is closed after the budget plus 5 s grace and returns `timeout`.
 - IMAP connect/greeting timeout 15 s; idle 60 s. SMTP uses the same connect and greeting timeouts and a 60 s socket timeout.
 - Sending: 20 messages per hour and 100 per day, per user and per mailbox (sent, failed, and in-progress attempts all count). At most 20 recipients. Override with `OPENMAIL_SEND_MAX_PER_HOUR`, `OPENMAIL_SEND_MAX_PER_DAY`, and `OPENMAIL_SEND_MAX_RECIPIENTS`. In single-user config mode the send log and these limits are kept in memory only and reset when the process exits.
 

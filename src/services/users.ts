@@ -16,6 +16,10 @@ const ARGON_OPTIONS = {
   parallelism: 1,
 } as const;
 
+export async function hashUserPassword(value: unknown): Promise<string> {
+  return hash(requireUserPassword(value), ARGON_OPTIONS);
+}
+
 export interface UserRecord {
   id: string;
   email: string;
@@ -110,6 +114,7 @@ export async function setPassword(
     const row = db.prepare("SELECT id FROM users WHERE email = ?").get(email) as { id: string } | undefined;
     if (!row) throw new MailError("not_found", "User was not found");
     db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(passwordHash, row.id);
+    db.prepare("UPDATE password_resets SET used_at = ? WHERE user_id = ? AND used_at IS NULL").run(new Date().toISOString(), row.id);
     const sessions = db.prepare("DELETE FROM sessions WHERE user_id = ?").run(row.id).changes;
     return { id: row.id, sessions };
   });

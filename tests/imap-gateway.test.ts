@@ -25,7 +25,7 @@ describe("imap gateway", () => {
     expect(JSON.stringify(result)).not.toContain(SECRET);
   });
 
-  it("releases the mailbox lock and logs out when fetch fails", async () => {
+  it("releases the mailbox lock and closes without logout when fetch fails", async () => {
     const client = fakeClient();
     client.fetchError = new Error(`fetch failed ${SECRET}`);
     const gateway = createImapGateway(() => client, { resolve: publicDns });
@@ -35,7 +35,8 @@ describe("imap gateway", () => {
     expect(result.error.message).not.toContain(SECRET);
     expect(result.error.message).toBe("IMAP request failed");
     expect(client.lockReleased).toBe(true);
-    expect(client.loggedOut).toBe(true);
+    expect(client.loggedOut).toBe(false);
+    expect(client.calls.filter((call) => call.method === "close")).toHaveLength(1);
   });
 
   it("runs UID THREAD when the capability is present and still opens read-only", async () => {
@@ -87,6 +88,71 @@ describe("imap gateway", () => {
     expect(options?.doSTARTTLS).toBe(false);
     expect(options?.tls?.rejectUnauthorized).toBe(true);
     expect(options?.logger).toBe(false);
+  });
+
+  it("hard-closes a stalled operation and handles late rejections while releasing the lock", async () => {
+    const client = fakeClient();
+    const gateway = createImapGateway(() => client, { resolve: publicDns, timeoutMs: 5, graceMs: 5 });
+    let rejectWork!: (err: Error) => void;
+    const work = gateway.withMailbox(account, "INBOX", async () => new Promise<void>((_resolve, reject) => { rejectWork = reject; }));
+    await expect(work).rejects.toMatchObject({ code: "timeout", category: "timeout" });
+    expect(client.calls.some((call) => call.method === "close")).toBe(true);
+    rejectWork(new Error("late failure"));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(client.lockReleased).toBe(true);
+    expect(client.loggedOut).toBe(false);
+    expect(client.calls.filter((call) => call.method === "close")).toHaveLength(1);
+  });
+
+  it.each(["connect", "operation"])("preserves a %s failure without attempting a hanging logout", async (phase) => {
+    const client = fakeClient();
+    const auth = Object.assign(new Error("Command failed"), { authenticationFailed: true });
+    client.logout = async () => { client.loggedOut = true; await new Promise<void>(() => {}); };
+    if (phase === "connect") client.connect = async () => { throw auth; };
+    const gateway = createImapGateway(() => client, { resolve: publicDns, timeoutMs: 5, graceMs: 5 });
+    await expect(gateway.withClient(account, async () => { throw auth; }))
+      .rejects.toMatchObject({ code: "imap_error", category: "auth_failed" });
+    expect(client.loggedOut).toBe(false);
+    expect(client.calls.filter((call) => call.method === "close")).toHaveLength(1);
+  });
+
+  it("handles a late connect rejection after the hard timeout without logout or unhandled rejection", async () => {
+    const client = fakeClient();
+    let rejectConnect!: (err: Error) => void;
+    client.connect = async () => new Promise<void>((_resolve, reject) => { rejectConnect = reject; });
+    const unhandled: unknown[] = [];
+    const listener = (reason: unknown) => { unhandled.push(reason); };
+    process.on("unhandledRejection", listener);
+    try {
+      const gateway = createImapGateway(() => client, { resolve: publicDns, timeoutMs: 5, graceMs: 5 });
+      await expect(gateway.withClient(account, async () => undefined)).rejects.toMatchObject({ code: "timeout" });
+      rejectConnect(new Error("late connect failure"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+      expect(client.loggedOut).toBe(false);
+      expect(client.calls.filter((call) => call.method === "close")).toHaveLength(1);
+    } finally {
+      process.off("unhandledRejection", listener);
+    }
+  });
+
+  it("bounds DNS, connect and logout too, and never creates a socket after expired DNS", async () => {
+    let resolveDns!: (addresses: string[]) => void;
+    let created = false;
+    const gateway = createImapGateway(() => { created = true; return fakeClient(); }, {
+      resolve: () => new Promise((resolve) => { resolveDns = resolve; }), timeoutMs: 5, graceMs: 5,
+    });
+    await expect(gateway.withClient(account, async () => undefined)).rejects.toMatchObject({ code: "timeout" });
+    resolveDns(["93.184.216.34"]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(created).toBe(false);
+    for (const phase of ["connect", "logout"] as const) {
+      const client = fakeClient();
+      client[phase] = async () => new Promise<void>(() => {});
+      const slow = createImapGateway(() => client, { resolve: publicDns, timeoutMs: 5, graceMs: 5 });
+      await expect(slow.withClient(account, async () => undefined)).rejects.toMatchObject({ code: "timeout" });
+      expect(client.calls.some((call) => call.method === "close")).toBe(true);
+    }
   });
 
   it("exposes imapflow's command runner used for THREAD", () => {
@@ -166,7 +232,7 @@ function fakeClient() {
       return {
         seq: 1,
         uid,
-        source: mime("<m@example.com>", "Wed, 21 Oct 2026 18:19:00 +0000", "hello"),
+        source: mime("<m@example.com>", uid === 7 ? "Wed, 21 Oct 2026 10:00:00 +0000" : "Wed, 21 Oct 2026 18:19:00 +0000", "hello"),
         flags: new Set(["\\Flagged"]),
         envelope: { subject: "Hi", messageId: "<m@example.com>" },
         size: 20,

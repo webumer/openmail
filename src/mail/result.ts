@@ -3,6 +3,9 @@ export interface ToolSuccess<T> {
   data: T;
   truncated: boolean;
   warnings: string[];
+  setup_required?: boolean;
+  message?: string;
+  dashboard_url?: string;
 }
 
 export interface ToolFailure {

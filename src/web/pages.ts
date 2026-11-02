@@ -1,3 +1,4 @@
+import { PROVIDER_HINTS } from "../mail/setup-help.js";
 import type { ApiKeySummary, MailAccountSummary } from "../services/index.js";
 import type { SendLogRow } from "../services/send-log.js";
 import type { GrantSummary } from "../oauth/grants.js";
@@ -126,7 +127,11 @@ export function homePage(input: { email: string | null; csrf?: string; notice?: 
     ["code", "MIT licensed", "OpenMail is MIT-licensed software. The source code is <a href=\"https://github.com/webumer/openmail\" rel=\"noopener\">on GitHub</a>."],
   ];
   const faq: Array<[string, string]> = [
-    ["Is my mail stored?", "No. OpenMail fetches messages from your provider when your assistant asks and does not keep them. It stores only your account details, encrypted mailbox passwords, and hashed API keys and sign-in tokens. See the <a href=\"/privacy\">privacy policy</a>."],
+    ["Is my mail stored?", "No. OpenMail fetches messages from your provider when your assistant asks and does not keep them. It stores account details, encrypted mailbox passwords, hashed keys and sign-in tokens, a minimal send log, and aggregate daily usage counters with no personal data. See the <a href=\"/privacy\">privacy policy</a>."],
+    ["Why does my assistant see no mail?", "After signup or allowing an assistant access, add your mailbox from the dashboard. With no mailbox connected, tools return setup guidance and a dashboard link; nothing is sent."],
+    ["How do I reset my password?", "Choose Forgot password? on the login page. When email reset is enabled, we send a link only when you ask. It is valid for 30 minutes and works once; tokens are stored only as hashes. A reset signs out browser sessions and keeps your API keys and connected apps. If email reset is unavailable, contact support from your signup address."],
+    ["What usage do you count?", "Daily aggregate counts of mailbox tests and saves, tool outcomes and duration buckets, sign-in/signup/reset outcomes and rate-limit rejections. They contain no personal data: no emails, hosts, usernames, IPs, ids, secrets, folders, searches or mail content. Counters are kept for 400 UTC calendar days."],
+    ["What happens if the mail server is slow?", "Search and thread reads stop after a default 25-second work budget and return available results with a warning. Narrow by date, folder or sender, or continue with the next cursor when provided. Connections allow 90 requests per minute by default."],
     ["Can it send or delete email?", "It can send only from a mailbox where you turned sending on, and only after your assistant shows you the email and you confirm it. It cannot delete, move or flag mail, and reading never marks a message as read."],
     ["Which providers work?", "Any mailbox with IMAP and SMTP. Migadu, Fastmail, Zoho, iCloud and Gmail have presets; for anything else, enter the servers yourself. Use an app-specific password where your provider offers one. Gmail needs an App Password."],
     ["Which assistants can I use?", "Any assistant that supports remote MCP servers. Clients that support MCP sign-in (OAuth), such as Claude custom connectors, Claude Code, ChatGPT and MCP Inspector, only need the URL: you log in to OpenMail and approve access, which is read-only unless you also allow sending. Grok Bot and clients that send a fixed header use an API key from your dashboard."],
@@ -237,7 +242,7 @@ export function privacyPage(options: { csrf?: string } = {}): string {
   return layout(
     "Privacy policy · OpenMail",
     `<article class="prose"><h1>Privacy policy</h1>
-<p class="muted">Last updated October 2026</p>
+<p class="muted">Last updated November 2026</p>
 <p>OpenMail is a connector that lets AI agents read your email through the Model Context Protocol (MCP). It is read-only by default; it sends email only from a mailbox where you turned sending on, and only messages you approve. This page explains what OpenMail keeps and what it does not.</p>
 <h2>What we store</h2>
 <ul>
@@ -245,6 +250,8 @@ export function privacyPage(options: { csrf?: string } = {}): string {
 <li>For each mailbox you add: a name, the mailbox address and username, the provider and server settings, and the mailbox password encrypted with AES-256-GCM using a key unique to your account.</li>
 <li>API keys as one-way SHA-256 hashes, with a short prefix, name, and created and last-used times so you can tell them apart.</li>
 <li>Session records for signed-in browsers, which expire after seven days.</li>
+<li>Password reset tokens stored only as SHA-256 hashes, valid for 30 minutes and single use. New requests invalidate earlier unused tokens.</li>
+<li>Aggregate daily usage counters: mailbox tests/saves by preset and safe outcome, tool calls by name/outcome and duration bucket, login/signup/reset outcomes, and MCP rate-limit rejections. These counters contain no personal data: no emails, hosts, usernames, IPs, user/account ids, passwords, tokens, folder names, search terms or content. There are no per-event records.</li>
 <li>A send log for each email sent through OpenMail: time, mailbox label, recipient count, status, message id and which connection sent it. It holds no message body, subject or addresses.</li>
 <li>For apps you connect with “Sign in with OpenMail” (OAuth): the app's name, its redirect address and, if it identifies itself with a public metadata document, a cached copy of that document; plus the connection (when you approved it and last used it) and its access and refresh tokens as one-way SHA-256 hashes.</li>
 </ul>
@@ -265,6 +272,8 @@ export function privacyPage(options: { csrf?: string } = {}): string {
 <p>Mailbox credentials are used only to sign in to your provider when you, or an agent holding one of your API keys or an app you approved, make a request. OpenMail does not sell, share, or analyse your data, and does not use it for advertising, profiling or training models.</p>
 <h2>Your agent</h2>
 <p>Messages OpenMail returns go to the agent you connected. How that agent and its provider handle them is covered by their own policies.</p>
+<h2>Password reset email</h2>
+<p>We send password-reset emails only when you ask, using a dedicated system sender rather than a connected mailbox. They contain a link and code valid for 30 minutes. Only token hashes are stored. The code is in a URL fragment that never reaches the server in a GET or access logs, and is cleared by the reset page script before being submitted in the form. Resetting signs out your browser sessions; API keys and connected apps keep working. If reset email is not configured, the form directs you to support.</p>
 <h2>Sending email</h2>
 <p>Sending is off until you turn it on for a mailbox and allow it for the connection. When you approve an email, OpenMail delivers it through your own mail provider's SMTP server to the recipients you approved, and tries to save a copy in your Sent folder. OpenMail does not keep the message.</p>
 <h2>Where your data is stored and who helps us run OpenMail</h2>
@@ -273,6 +282,7 @@ export function privacyPage(options: { csrf?: string } = {}): string {
 <li>Contabo GmbH: server hosting, where the database and logs are kept.</li>
 <li>Cloudflare: DNS for openmail.tools, and forwarding of mail sent to ${SUPPORT_EMAIL}. Traffic to the service itself does not pass through Cloudflare.</li>
 <li>Google (Gmail): the inbox where support email is read.</li>
+<li>When password reset email is enabled, the configured system email provider receives your login email address and reset email only to deliver the link you requested.</li>
 <li>Let's Encrypt: HTTPS certificates. It receives no user data.</li>
 </ul>
 <p>Your mail provider is the one you choose. OpenMail connects to it only on your behalf.</p>
@@ -281,6 +291,8 @@ export function privacyPage(options: { csrf?: string } = {}): string {
 <li>Email content (messages, subjects, addresses and attachments, read or sent): never stored. It is held in memory only while a request is answered.</li>
 <li>Account and mailbox settings, including encrypted mailbox passwords and an optional separate SMTP password encrypted with its own key binding: kept until you remove the mailbox or delete your account.</li>
 <li>Send log (no message content): kept for 90 days.</li>
+<li>Daily aggregate counters with no personal data: 400 UTC calendar days, pruned on startup. Single-user mode records no metrics.</li>
+<li>Password reset hashes: valid for 30 minutes; expired records are pruned on startup and when a new code is issued.</li>
 <li>Signed-in browser sessions: 7 days. OAuth access tokens: 1 hour. OAuth refresh tokens: 30 days. API keys: until you revoke them.</li>
 <li>Web server access logs (IP address, time, address requested, browser type and response status; never passwords, tokens or cookies): 14 days, then deleted automatically.</li>
 </ul>
@@ -336,7 +348,7 @@ export function termsPage(options: { csrf?: string } = {}): string {
   return layout(
     "Terms of service · OpenMail",
     `<article class="prose"><h1>Terms of service</h1>
-<p class="muted">Last updated October 2026</p>
+<p class="muted">Last updated November 2026</p>
 <p>By creating an OpenMail account or using an OpenMail API key you agree to these terms.</p>
 <h2>The service</h2>
 <p>OpenMail gives AI agents access to mailboxes you connect, over the Model Context Protocol. Sending is off unless you turn it on. It is provided "as is", without warranties of any kind, and may change or be unavailable at times.</p>
@@ -396,11 +408,29 @@ ${errorBlock(input.errors)}
 <label>Password <input name="password" type="password" autocomplete="${signup ? "new-password" : "current-password"}" minlength="${signup ? "10" : "1"}" maxlength="200" required></label>
 <button class="btn btn-primary btn-block" type="submit">${button}</button>
 </form>
-<div class="auth-other">${other}</div>
+<div class="auth-other">${other}${signup ? "" : '<p><a href="/forgot">Forgot password?</a></p>'}</div>
 ${signup ? '<p class="fine">By signing up you agree to the <a href="/terms">terms</a> and <a href="/privacy">privacy policy</a>.</p>' : ""}
 </div></div>`,
     { path: action, description: signup ? "Create a free OpenMail account." : "Log in to OpenMail." },
   );
+}
+
+export function resetPage(input: { mode: "forgot" | "reset"; csrf: string; message?: string; errors?: string[]; passwordChanged?: boolean }): string {
+  const forgot = input.mode === "forgot";
+  const title = forgot ? "Forgot password?" : "Reset password";
+  const fields = forgot
+    ? '<label>Email <input name="email" type="email" autocomplete="username" maxlength="254" required></label>'
+    : `<label id="reset-code-label">Reset code <input id="reset-token" name="token" type="text" autocomplete="off" maxlength="100" required></label>
+<p id="reset-code-help" class="fine">Paste the code from your email. The link and code expire in 30 minutes.</p>
+<label>New password <input name="password" type="password" autocomplete="new-password" minlength="10" maxlength="200" required></label>
+<label>Confirm password <input name="confirm" type="password" autocomplete="new-password" minlength="10" maxlength="200" required></label>`;
+  return layout(`${title} · OpenMail`, `<div class="auth"><div class="card auth-card"><h1>${title}</h1>
+${input.message ? `<p>${escapeHtml(input.message)}</p>` : ""}${errorBlock(input.errors)}
+${input.passwordChanged ? '<p><a href="/dashboard">Review your API keys and connected apps on the dashboard</a></p>' : ""}
+${input.message ? "" : `<form class="stack" method="post" action="/${input.mode}">
+<input type="hidden" name="_csrf" value="${escapeHtml(input.csrf)}">${fields}
+<button class="btn btn-primary" type="submit">${forgot ? "Send reset link" : "Change password"}</button></form>`}
+<p><a href="/login">Sign in</a></p></div></div>`, { script: true, path: `/${input.mode}` });
 }
 
 export function dashboardPage(input: {
@@ -415,14 +445,16 @@ export function dashboardPage(input: {
   errors?: string[];
   notice?: string;
   probeMessage?: string;
+  probeWarning?: boolean;
 }): string {
   const alerts = `${input.notice ? `<div class="notice"><p>${escapeHtml(input.notice)}</p></div>` : ""}${
-    input.probeMessage ? `<div class="notice"><p>${escapeHtml(input.probeMessage)}</p></div>` : ""
+    input.probeMessage ? `<div class="notice${input.probeWarning ? " warn" : ""}" role="status"><p>${escapeHtml(input.probeMessage)}</p></div>` : ""
   }${errorBlock(input.errors)}`;
   return layout(
     "Dashboard · OpenMail",
     `<div class="dash-head"><div><h1>Dashboard</h1><p class="muted">Signed in as ${escapeHtml(input.email)}</p></div></div>
 ${alerts}
+${input.accounts.length === 0 ? '<div class="notice" role="note"><h2>Next step: add your mailbox</h2><p>Your account is ready. Connect a mailbox so your assistant can see your mail.</p><a class="btn btn-primary" href="#account-form">Add mailbox</a></div>' : ""}
 <div class="dash-grid">
 <div class="card">${accountList(input.accounts, input.csrf)}</div>
 <div class="card">${accountForm(input.draft, input.csrf)}</div>
@@ -534,6 +566,7 @@ function accountForm(draft: AccountDraft, csrf: string): string {
 <label>Username <input id="username" name="username" maxlength="200" value="${escapeHtml(draft.username)}" placeholder="Defaults to the email address"></label>
 <label>Password <input id="mailbox-password" name="password" type="password" maxlength="1000" autocomplete="off" required></label>
 <label>Preset <select id="preset" name="preset">${PROVIDER_PRESETS.map((preset) => option(preset, preset, draft.preset === preset)).join("")}</select></label>
+<div id="provider-hints" class="fine">${PROVIDER_PRESETS.map((preset) => `<p data-provider-hint="${preset}">${escapeHtml(PROVIDER_HINTS[preset])}</p>`).join("")}</div>
 <label>Zoho region <select id="zoho_region" name="zoho_region"${draft.preset === "zoho" ? "" : " disabled"}>${ZOHO_REGIONS.map((region) => option(region, region, draft.zohoRegion === region)).join("")}</select></label>
 <div class="grid-2">
 <label>IMAP host <input id="imap_host" name="imap_host" value="${escapeHtml(draft.imapHost)}"${locked}></label>
@@ -658,7 +691,7 @@ export function consentPage(view: ConsentView): string {
     : "";
   const mailboxes =
     view.accounts.length === 0
-      ? `<p class="muted">You have no mailboxes yet. After connecting, add one from your <a href="/dashboard">dashboard</a>.</p>`
+      ? `<p class="muted">You have no mailboxes yet. After you allow access, add a mailbox at the <a href="/dashboard">dashboard</a>; otherwise your assistant will see no mail.</p>`
       : `<ul class="consent-list">${view.accounts
           .map((a) => `<li>${icon("inbox")}<span><strong>${escapeHtml(a.name)}</strong> · ${escapeHtml(a.email)}</span></li>`)
           .join("")}</ul>`;

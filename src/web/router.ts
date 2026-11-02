@@ -2,7 +2,12 @@ import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OutgoingHttpHeaders } from "node:http";
 import type Database from "better-sqlite3";
-import { scrubSecret, toMailError, MailError } from "../errors.js";
+import { testConnection } from "../services/mail-accounts.js";
+import { createPasswordResetHandler } from "./password-reset.js";
+import type { SystemMailer } from "../services/system-mailer.js";
+import { createMetricRecorder, recordMetric, type MetricRecorder } from "../services/metrics.js";
+import { setupFailureMessage } from "../mail/setup-help.js";
+import { scrubSecret, toMailError, toSmtpError, failureCategory, MailError } from "../errors.js";
 import type { ImapGateway } from "../mail/imap-gateway.js";
 import type { SmtpGateway } from "../mail/smtp-gateway.js";
 import { resolveEndpoints } from "../mail/presets.js";
@@ -33,7 +38,7 @@ import {
   termsPage,
 } from "./pages.js";
 import { renderMarkdown } from "./markdown.js";
-import { checkCustomHost } from "./host-guard.js";
+import { checkCustomHostFailure } from "./host-guard.js";
 import { mcpUrl } from "./public-url.js";
 import { AUTH_ATTEMPT_LIMIT, AUTH_ATTEMPT_WINDOW_MS, attemptAllowed, rateLimitEmail } from "./rate.js";
 import { clientAddress, formFields, isFormContentType, readBody, requestUrl, reviewerGuideMarkdown, staticFile } from "./request.js";
@@ -51,6 +56,8 @@ export interface WebAppConfig {
 }
 
 export interface WebRuntime {
+  metrics?: MetricRecorder;
+  systemMailer?: SystemMailer;
   db: Database;
   masterKey: Buffer;
   imap: ImapGateway;
@@ -67,7 +74,7 @@ export interface WebRuntime {
   probeRateLimit?: { limit: number; windowMs: number };
 }
 
-/** Each "test connection" or "add account" opens one IMAP login. */
+/** Rate-limit connection checks, including optional SMTP verification, without sending mail. */
 export const PROBE_ATTEMPT_LIMIT = 20;
 export const PROBE_ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
 
@@ -99,6 +106,7 @@ export function createWebHandler(options: WebRuntime): (req: IncomingMessage, re
   const windowMs = options.authRateLimit?.windowMs ?? AUTH_ATTEMPT_WINDOW_MS;
   const handler: Handler = {
     ...options,
+    metrics: options.metrics ?? createMetricRecorder(options.db),
     loginAttempts: new SlidingWindowRateLimit(limit, windowMs),
     signupAttempts: new SlidingWindowRateLimit(limit, windowMs),
     probeAttempts: new SlidingWindowRateLimit(
@@ -106,10 +114,12 @@ export function createWebHandler(options: WebRuntime): (req: IncomingMessage, re
       options.probeRateLimit?.windowMs ?? PROBE_ATTEMPT_WINDOW_MS,
     ),
   };
+  const reset = createPasswordResetHandler(handler);
   return async (req, res) => {
     const url = requestUrl(req);
-    if (!isWebPath(url.pathname)) return false;
     try {
+      if (await reset(req, res)) return true;
+      if (!isWebPath(url.pathname)) return false;
       await route(req, res, url, handler);
     } catch {
       if (!res.headersSent && !res.writableEnded) {
@@ -276,6 +286,7 @@ async function submitAuth(
   const ip = clientAddress(req, handler.trustProxy);
   const limiter = mode === "signup" ? handler.signupAttempts : handler.loginAttempts;
   if (!attemptAllowed(limiter, mode, ip, rateLimitEmail(fields.email))) {
+    recordMetric(handler.metrics, { kind: "auth", name: mode, outcome: "rate_limited" });
     limited(res);
     return;
   }
@@ -283,14 +294,17 @@ async function submitAuth(
   const nextOpt = next ? { next } : {};
   const parsed = mode === "signup" ? parseSignup(fields) : parseLogin(fields);
   if (!parsed.email || parsed.password === undefined || parsed.errors.length > 0) {
+    recordMetric(handler.metrics, { kind: "auth", name: mode, outcome: "failed" });
     writeHtml(res, 400, authPage({ mode, csrf: expected, email: clipField(fields.email), errors: parsed.errors, ...nextOpt }));
     return;
   }
   if (mode === "signup") {
     try {
       const user = await users.create(handler.db, handler.masterKey, { email: parsed.email, password: parsed.password });
+      recordMetric(handler.metrics, { kind: "auth", name: mode, outcome: "ok" });
       startSession(res, handler, cookies.get(SESSION_COOKIE), user.id, next);
     } catch (err) {
+      recordMetric(handler.metrics, { kind: "auth", name: mode, outcome: "failed" });
       const message = safeMailMessage(err, parsed.password);
       if (!message) throw err;
       const status = err instanceof MailError && err.code === "conflict" ? 409 : 400;
@@ -300,6 +314,7 @@ async function submitAuth(
   }
   const user = await users.verifyPassword(handler.db, { email: parsed.email, password: parsed.password });
   if (!user) {
+    recordMetric(handler.metrics, { kind: "auth", name: mode, outcome: "failed" });
     writeHtml(
       res,
       401,
@@ -307,6 +322,7 @@ async function submitAuth(
     );
     return;
   }
+  recordMetric(handler.metrics, { kind: "auth", name: mode, outcome: "ok" });
   startSession(res, handler, cookies.get(SESSION_COOKIE), user.id, next);
 }
 
@@ -362,6 +378,7 @@ async function submitAccount(
     return;
   }
   const parsed = parseAccountForm(fields);
+  const checkSmtp = probeOnly || Boolean(fields.smtp_host?.trim() || parsed.account?.smtpUsername);
   delete fields.password;
   delete fields.smtp_password;
   const notice = noticeFor(url);
@@ -373,25 +390,49 @@ async function submitAccount(
     limited(res);
     return;
   }
-  const failure = (await hostProblem(handler, parsed.account)) ?? (await imapProbe(handler, parsed.account));
+  const metricKind = probeOnly ? "mailbox_test" : "mailbox_save";
+  // Address/port guard failures always block (both IMAP and SMTP), as before v0.5.
+  // Only an SMTP sign-in/connection failure is downgraded to a warning on save.
+  const failure = (await hostProblem(handler, parsed.account, "IMAP"))
+    ?? (await hostProblem(handler, parsed.account, "SMTP"))
+    ?? (await connectionProbe(handler, parsed.account, "IMAP"));
   if (failure) {
-    writeDashboard(res, handler, session, { draft: parsed.draft, errors: [failure], notice }, 400);
+    recordMetric(handler.metrics, { kind: metricKind, name: parsed.account.preset, outcome: `${failure.part.toLowerCase()}:${failureCategory(failure.error)}` });
+    writeDashboard(res, handler, session, { draft: parsed.draft, errors: [failure.message], notice }, 400);
     return;
   }
+  const smtpFailure = checkSmtp
+    ? await connectionProbe(handler, parsed.account, "SMTP")
+    : null;
   if (probeOnly) {
+    recordMetric(handler.metrics, { kind: metricKind, name: parsed.account.preset,
+      outcome: smtpFailure ? `smtp:${failureCategory(smtpFailure.error)}` : "ok" });
     writeDashboard(res, handler, session, {
       draft: parsed.draft,
       notice,
-      probeMessage: "Signed in to IMAP. The account was not saved.",
-    });
+      probeMessage: smtpFailure
+        ? `IMAP: Signed in. Reading works. ${smtpFailure.message} Sending would not work. The account was not saved.`
+        : "IMAP: Signed in. SMTP: Signed in. Reading and sending connections work. The account was not saved.",
+      probeWarning: Boolean(smtpFailure),
+    }, smtpFailure ? 400 : 200);
     return;
   }
   try {
     mailAccounts.add(handler.db, handler.masterKey, accountInput(session.userId, parsed.account));
+    // The save succeeded; an SMTP warning is counted separately as a test outcome.
+    recordMetric(handler.metrics, { kind: metricKind, name: parsed.account.preset, outcome: "ok" });
+    if (smtpFailure) {
+      recordMetric(handler.metrics, { kind: "mailbox_test", name: parsed.account.preset, outcome: `smtp:${failureCategory(smtpFailure.error)}` });
+    }
   } catch (err) {
     const message = safeMailMessage(err, parsed.account.password);
     if (!message) throw err;
     writeDashboard(res, handler, session, { draft: parsed.draft, errors: [message], notice }, 400);
+    return;
+  }
+  if (smtpFailure) {
+    writeDashboard(res, handler, session, { draft: emptyAccountDraft(),
+      probeMessage: `Mailbox saved. IMAP: Reading works. ${smtpFailure.message} Sending would not work.`, probeWarning: true });
     return;
   }
   redirect(res, "/dashboard?notice=account-added");
@@ -514,7 +555,7 @@ function writeDashboard(
   res: ServerResponse,
   handler: Handler,
   session: SessionRecord,
-  input: { draft: AccountDraft; errors?: string[]; notice?: string; probeMessage?: string },
+  input: { draft: AccountDraft; errors?: string[]; notice?: string; probeMessage?: string; probeWarning?: boolean },
   status = 200,
 ): void {
   writeHtml(
@@ -532,24 +573,29 @@ function writeDashboard(
       ...(input.errors && input.errors.length > 0 ? { errors: input.errors } : {}),
       ...(input.notice ? { notice: input.notice } : {}),
       ...(input.probeMessage ? { probeMessage: input.probeMessage } : {}),
+      ...(input.probeWarning ? { probeWarning: true } : {}),
     }),
   );
 }
 
-async function hostProblem(handler: Handler, account: ParsedAccount): Promise<string | null> {
+interface ProbeFailure { message: string; part: "IMAP" | "SMTP"; error: MailError }
+
+async function hostProblem(handler: Handler, account: ParsedAccount, part: "IMAP" | "SMTP"): Promise<ProbeFailure | null> {
   if (account.preset !== "custom") return null;
   const checks = [
     { host: account.imapHost ?? "", port: account.imapPort ?? 0, kind: "IMAP" as const },
     { host: account.smtpHost ?? "", port: account.smtpPort ?? 0, kind: "SMTP" as const },
   ];
-  for (const check of checks) {
-    const problem = await checkCustomHost({ ...check, allowInsecureLocalhost: handler.allowInsecureLocalhost });
-    if (problem) return problem;
+  for (const check of checks.filter((check) => check.kind === part)) {
+    const problem = await checkCustomHostFailure({ ...check, allowInsecureLocalhost: handler.allowInsecureLocalhost });
+    if (problem) {
+      return { part: check.kind, error: problem, message: `${problem.message}. ${setupFailureMessage(check.kind, problem, account.preset)}` };
+    }
   }
   return null;
 }
 
-async function imapProbe(handler: Handler, account: ParsedAccount): Promise<string | null> {
+async function connectionProbe(handler: Handler, account: ParsedAccount, part: "IMAP" | "SMTP"): Promise<ProbeFailure | null> {
   const endpoints = resolveEndpoints({
     preset: account.preset,
     ...(account.zohoRegion ? { zohoRegion: account.zohoRegion } : {}),
@@ -585,13 +631,12 @@ async function imapProbe(handler: Handler, account: ParsedAccount): Promise<stri
       : {}),
   };
   try {
-    await handler.imap.withClient(credentials, async () => undefined);
+    if (part === "IMAP") await testConnection(credentials, handler.imap);
+    else await handler.smtp.verify(credentials);
     return null;
   } catch (err) {
-    const mail = toMailError(err, account.password);
-    const clean = scrubSecret(mail.message, account.password);
-    if (mail.code === "insecure_transport" && !clean.includes(account.password)) return clean;
-    return "Could not sign in to that mailbox. Check the host, port, TLS, username, and password.";
+    const mail = part === "SMTP" ? toSmtpError(err, [account.password, account.smtpPassword]) : toMailError(err, account.password);
+    return { part, error: mail, message: setupFailureMessage(part, mail, account.preset) };
   }
 }
 
@@ -649,17 +694,36 @@ async function submitSending(req: IncomingMessage, res: ServerResponse, handler:
     limited(res);
     return;
   }
+  if (account.preset === "custom") {
+    // Re-check the stored SMTP address and port before turning sending on.
+    const problem = await checkCustomHostFailure({
+      host: account.smtp.host,
+      port: account.smtp.port,
+      kind: "SMTP",
+      allowInsecureLocalhost: handler.allowInsecureLocalhost,
+    });
+    if (problem) {
+      recordMetric(handler.metrics, { kind: "mailbox_test", name: account.preset, outcome: `smtp:${failureCategory(problem)}` });
+      writeDashboard(res, handler, session, {
+        draft: emptyAccountDraft(),
+        errors: [`${problem.message}. ${setupFailureMessage("SMTP", problem, account.preset)}`],
+      }, 400);
+      return;
+    }
+  }
   try {
     await handler.smtp.verify(account);
   } catch (err) {
-    const mail = err instanceof MailError ? err : toMailError(err, account.password);
-    const message = scrubSecret(scrubSecret(mail.message, account.password), account.smtpAuth.pass);
+    const mail = toSmtpError(err, [account.password, account.smtpAuth.pass]);
+    const message = setupFailureMessage("SMTP", mail, account.preset);
+    recordMetric(handler.metrics, { kind: "mailbox_test", name: account.preset, outcome: `smtp:${failureCategory(mail)}` });
     writeDashboard(res, handler, session, {
       draft: emptyAccountDraft(),
       errors: [message || "Could not sign in to the SMTP server."],
     }, 400);
     return;
   }
+  recordMetric(handler.metrics, { kind: "mailbox_test", name: account.preset, outcome: "ok" });
   mailAccounts.setSendEnabled(handler.db, session.userId, accountId, true);
   redirect(res, "/dashboard?notice=sending-on");
 }

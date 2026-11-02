@@ -8,9 +8,12 @@
  */
 import { pathToFileURL } from "node:url";
 import type Database from "better-sqlite3";
+import { testConnection, MailboxConnectionError } from "../services/mail-accounts.js";
+import { aggregateMetrics, createMetricRecorder, METRIC_KINDS, recordMetric, type MetricKind } from "../services/metrics.js";
+import { setupFailureMessage } from "../mail/setup-help.js";
 import { loadMasterKey } from "../crypto/index.js";
 import { migrate, openDatabase, resolveDatabasePath } from "../db/index.js";
-import { MailError, scrubSecret, toMailError } from "../errors.js";
+import { MailError, toMailError, toSmtpError, failureCategory, operatorErrorText } from "../errors.js";
 import { createImapGateway, isAllowlistedInsecureHost, parseInsecureImapHosts, parseInsecureSmtpHosts, type ImapGateway } from "../mail/index.js";
 import { createSmtpGateway, type SmtpGateway } from "../mail/smtp-gateway.js";
 import { SqliteCredentialStore } from "../store/sqlite-store.js";
@@ -21,6 +24,7 @@ import type { AccountCredentials } from "../store/types.js";
 
 export const USAGE = `Usage: admin <command> [options]
 
+  metrics       [--days N] [--kind K] [--json]              daily aggregate counters; default last 14 days
   list-users
   create-user   --email <login email>                       password on stdin
   set-password  --email <login email>                       new password on stdin; signs out web sessions, keeps API keys
@@ -55,7 +59,7 @@ export function parseArgs(argv: readonly string[]): { command: string; flags: Ma
   const flags = new Map<string, string | true>();
   for (let i = 0; i < rest.length; i += 1) {
     const arg = rest[i] ?? "";
-    if (!arg.startsWith("--")) throw new MailError("invalid_input", `Unexpected argument: ${arg}`);
+    if (!arg.startsWith("--")) throw new MailError("invalid_input", "Unexpected positional argument");
     const name = arg.slice(2);
     const next = rest[i + 1];
     if (next === undefined || next.startsWith("--")) {
@@ -82,7 +86,26 @@ export async function runAdmin(argv: readonly string[], deps: AdminDeps, io: Adm
     return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
   };
 
+  const metrics = createMetricRecorder(deps.db);
   switch (command) {
+    case "metrics": {
+      const rawDays = flags.get("days");
+      const days = rawDays === undefined ? 14 : typeof rawDays === "string" && /^\d+$/.test(rawDays) ? Number(rawDays) : Number.NaN;
+      if (!Number.isSafeInteger(days) || days < 1 || days > 400) throw new MailError("invalid_input", "--days must be an integer from 1 to 400");
+      const kind = flags.get("kind");
+      if (kind !== undefined && (typeof kind !== "string" || !(METRIC_KINDS as readonly string[]).includes(kind))) {
+        throw new MailError("invalid_input", "--kind must be a supported metric kind");
+      }
+      if (flags.has("json") && flags.get("json") !== true) throw new MailError("invalid_input", "--json takes no value");
+      const rows = aggregateMetrics(deps.db, days, kind as MetricKind | undefined);
+      if (flags.get("json") === true) io.out(JSON.stringify(rows));
+      else {
+        io.out(`Aggregate metrics: last ${days} UTC days`);
+        for (const row of rows) io.out(`${row.kind}\t${row.name}\t${row.outcome}\t${row.bucket || "-"}\t${row.count}`);
+        io.out(`total=${rows.reduce((total, row) => total + row.count, 0)}`);
+      }
+      return;
+    }
     case "list-users": {
       const rows = deps.db
         .prepare(
@@ -119,61 +142,51 @@ export async function runAdmin(argv: readonly string[], deps: AdminDeps, io: Adm
       return;
     }
     case "add-account": {
-      const userId = userIdFor(deps.db, text("user"));
       const preset = parsePreset(text("preset"));
-      const insecureImapHosts = parseInsecureImapHosts(io.env.OPENMAIL_INSECURE_IMAP_HOSTS);
-      let custom: { host: string; port: number } | undefined;
-      if (preset === "custom") {
-        // The CLI adds custom hosts only for operator-run internal servers on
-        // the plain-IMAP allowlist (the reviewer demo). Everyone else uses the web form.
-        const host = text("imap-host").toLowerCase();
-        const port = Number(text("imap-port"));
-        if (flags.get("plain") !== true || !isAllowlistedInsecureHost(host, insecureImapHosts)) {
-          throw new MailError("invalid_input", "Custom hosts in the CLI must be plain IMAP hosts on OPENMAIL_INSECURE_IMAP_HOSTS");
+      try {
+        const userId = userIdFor(deps.db, text("user"));
+        const insecureImapHosts = parseInsecureImapHosts(io.env.OPENMAIL_INSECURE_IMAP_HOSTS);
+        const insecureSmtpHosts = parseInsecureSmtpHosts(io.env.OPENMAIL_INSECURE_SMTP_HOSTS);
+        let custom: { host: string; port: number } | undefined;
+        if (preset === "custom") {
+          // Operator-run internal mail servers only. Other custom providers use the web form.
+          const host = text("imap-host").toLowerCase();
+          const port = Number(text("imap-port"));
+          if (flags.get("plain") !== true || !isAllowlistedInsecureHost(host, insecureImapHosts)) {
+            throw new MailError("invalid_input", "Custom hosts in the CLI must be plain IMAP hosts on OPENMAIL_INSECURE_IMAP_HOSTS", "host_not_allowed");
+          }
+          if (!Number.isInteger(port) || port < 1 || port > 65535) throw new MailError("invalid_input", "--imap-port is invalid");
+          custom = { host, port };
         }
-        if (!Number.isInteger(port) || port < 1 || port > 65535) throw new MailError("invalid_input", "--imap-port is invalid");
-        custom = { host, port };
-      }
-      const zohoRegion = parseZohoRegion(optional("zoho-region"));
-      const passwordEnv = optional("password-env");
-      const password = passwordEnv ? (io.env[passwordEnv] ?? "") : await io.readSecret();
-      if (!password) throw new MailError("invalid_input", "Mailbox password is empty");
-      const email = text("email");
-      const username = optional("username") ?? email;
-      const name = text("name");
-      if (flags.get("skip-probe") !== true) {
-        await probe(deps.imap, {
-          name,
-          email,
-          username,
-          password,
-          preset,
+        const zohoRegion = parseZohoRegion(optional("zoho-region"));
+        const passwordEnv = optional("password-env");
+        const password = passwordEnv ? (io.env[passwordEnv] ?? "") : await io.readSecret();
+        if (!password) throw new MailError("invalid_input", "Mailbox password is empty");
+        const email = text("email");
+        const username = optional("username") ?? email;
+        const name = text("name");
+        if (flags.get("skip-probe") !== true) {
+          await probe(deps.imap, {
+            name, email, username, password, preset,
+            ...(zohoRegion ? { zohoRegion } : {}),
+            ...(custom ? { custom, insecureImapHosts, insecureSmtpHosts } : {}),
+          });
+          io.out("imap login ok");
+        }
+        const added = mailAccounts.add(deps.db, deps.masterKey, {
+          userId, name, email, username, preset, password,
           ...(zohoRegion ? { zohoRegion } : {}),
-          ...(custom ? { custom, insecureImapHosts } : {}),
+          ...(custom ? { imapHost: custom.host, imapPort: custom.port, imapSecure: false,
+            smtpHost: custom.host, smtpPort: 3025, smtpSecure: false, smtpStarttls: false } : {}),
         });
-        io.out("imap login ok");
+        recordMetric(metrics, { kind: "mailbox_save", name: preset, outcome: "ok" });
+        io.out(`added account ${added.name} ${added.id}`);
+      } catch (err) {
+        if (err instanceof MailboxConnectionError || (err instanceof MailError && err.category === "host_not_allowed")) {
+          recordMetric(metrics, { kind: "mailbox_save", name: preset, outcome: `imap:${failureCategory(err)}` });
+        }
+        throw err;
       }
-      const added = mailAccounts.add(deps.db, deps.masterKey, {
-        userId,
-        name,
-        email,
-        username,
-        preset,
-        password,
-        ...(zohoRegion ? { zohoRegion } : {}),
-        ...(custom
-          ? {
-              imapHost: custom.host,
-              imapPort: custom.port,
-              imapSecure: false,
-              smtpHost: custom.host,
-              smtpPort: 3025,
-              smtpSecure: false,
-              smtpStarttls: false,
-            }
-          : {}),
-      });
-      io.out(`added account ${added.name} ${added.id}`);
       return;
     }
     case "enable-sending":
@@ -198,9 +211,11 @@ export async function runAdmin(argv: readonly string[], deps: AdminDeps, io: Adm
         try {
           await smtp.verify(account);
         } catch (err) {
-          const mail = err instanceof MailError ? err : toMailError(err, account.password);
-          throw new MailError(mail.code, scrubSecret(scrubSecret(mail.message, account.password), account.smtpAuth.pass));
+          const mail = toSmtpError(err, [account.password, account.smtpAuth.pass]);
+          recordMetric(metrics, { kind: "mailbox_test", name: account.preset, outcome: `smtp:${failureCategory(mail)}` });
+          throw new MailError(mail.code, setupFailureMessage("SMTP", mail, account.preset), failureCategory(mail));
         }
+        recordMetric(metrics, { kind: "mailbox_test", name: account.preset, outcome: "ok" });
         io.out("smtp login ok");
       }
       mailAccounts.setSendEnabled(deps.db, userId, row.id, true);
@@ -248,6 +263,7 @@ async function probe(
     zohoRegion?: ZohoRegion;
     custom?: { host: string; port: number };
     insecureImapHosts?: readonly string[];
+    insecureSmtpHosts?: readonly string[];
   },
 ): Promise<void> {
   const endpoints = input.custom
@@ -271,12 +287,14 @@ async function probe(
     smtpAuth: { user: input.username, pass: input.password },
     autoSavesSent: endpoints.autoSavesSent,
     ...(input.insecureImapHosts ? { insecureImapHosts: input.insecureImapHosts } : {}),
+    ...(input.insecureSmtpHosts ? { insecureSmtpHosts: input.insecureSmtpHosts } : {}),
   };
   try {
-    await imap.withClient(credentials, async () => undefined);
+    await testConnection(credentials, imap);
   } catch (err) {
     const mail = toMailError(err, input.password);
-    throw new MailError(mail.code, `IMAP login failed: ${scrubSecret(mail.message, input.password)}`);
+    const part = err instanceof MailboxConnectionError ? err.part : "IMAP";
+    throw new MailboxConnectionError(part, new MailError(mail.code, `${part} login failed: ${setupFailureMessage(part, mail, input.preset)}`, failureCategory(mail)));
   }
 }
 
@@ -289,19 +307,24 @@ async function readStdinSecret(): Promise<string> {
   return Buffer.concat(chunks).toString("utf8").replace(/\r?\n$/, "");
 }
 
+async function main(): Promise<void> {
+  const db = openDatabase(resolveDatabasePath(process.env));
+  try {
+    migrate(db);
+    await runAdmin(
+      process.argv.slice(2),
+      { db, masterKey: loadMasterKey(process.env.OPENMAIL_MASTER_KEY), imap: createImapGateway() },
+      { readSecret: readStdinSecret, env: process.env, out: (line) => console.log(line) },
+    );
+  } finally {
+    db.close();
+  }
+}
+
 const invoked = process.argv[1];
 if (invoked && import.meta.url === pathToFileURL(invoked).href) {
-  const db = openDatabase(resolveDatabasePath(process.env));
-  migrate(db);
-  runAdmin(
-    process.argv.slice(2),
-    { db, masterKey: loadMasterKey(process.env.OPENMAIL_MASTER_KEY), imap: createImapGateway() },
-    { readSecret: readStdinSecret, env: process.env, out: (line) => console.log(line) },
-  )
-    .then(() => db.close())
-    .catch((err: unknown) => {
-      db.close();
-      console.error(err instanceof MailError || err instanceof Error ? err.message : "Admin command failed");
-      process.exit(1);
-    });
+  main().catch((err: unknown) => {
+    console.error(operatorErrorText(err, "Admin command failed"));
+    process.exit(1);
+  });
 }

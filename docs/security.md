@@ -18,11 +18,21 @@
 - CSRF on every POST: session secret in a hidden `_csrf` field after login; double-submit `om_csrf` cookie for signup/login.
 - Login and signup rate-limited per IP and per email (10 attempts / 15 minutes by default) → `429`.
 - Account passwords: minimum 10 characters for user accounts; zod validation with friendly form errors; password fields are never re-filled.
-- Adding a mail account always probes IMAP first; save only on success. "Test connection", "Save", and turning on "Allow sending" (which checks SMTP first) share a per-user limit (20 sign-in attempts / 15 minutes) → `429`.
-- Custom hosts must resolve only to public addresses (no loopback, private, link-local, CGNAT, multicast or documentation ranges, IPv4 or IPv6) and use standard ports (IMAP 143/993, SMTP 465/587/2525). This stops the probe being used to scan the server's own network. Presets skip this form check because their hosts are fixed. Plain SMTP is refused except for loopback in local tests or an exact hostname in `OPENMAIL_INSECURE_SMTP_HOSTS` (the hosted demo uses `demo-mail` only). TLS certificate checks cannot be turned off.
+- Adding a mail account requires a successful IMAP probe. When SMTP fields are supplied, Save also verifies SMTP without sending; an SMTP sign-in or connection failure shows a warning and the mailbox is still saved for reading. Custom IMAP and SMTP hosts must pass the public-address and port guard (SMTP ports 465, 587, 2525) or Save is refused; the guard runs again before sending is enabled. “Test connection” reports IMAP and SMTP separately, and enabling sending requires SMTP success. Admin add-account probes only IMAP. Sending remains off after Save. "Test connection", "Save", and turning on "Allow sending" (which checks SMTP first) share a per-user limit (20 sign-in attempts / 15 minutes) → `429`.
+- Custom hosts must resolve only to public addresses (no loopback, private, link-local, CGNAT, multicast or documentation ranges, IPv4 or IPv6) and use standard ports (IMAP 143/993, SMTP 465/587/2525). DNS failures, empty answers and private addresses all return the same public-address guidance and host_not_allowed category, including in metrics. This stops the probe being used to scan the server's own network. Presets skip this form check because their hosts are fixed. Plain SMTP is refused except for loopback in local tests or an exact hostname in `OPENMAIL_INSECURE_SMTP_HOSTS` (the hosted demo uses `demo-mail` only). TLS certificate checks cannot be turned off.
 - Every IMAP connection (probe, MCP tool, CLI) resolves the host again, refuses it if any address is private, and connects to the checked IP while TLS still verifies the certificate against the original hostname. A hostname that is re-pointed at `127.0.0.1` or `169.254.169.254` after it was saved (DNS rebinding) is refused with `blocked_host`. Only operator-trusted hosts skip this: loopback with `OPENMAIL_ALLOW_INSECURE_LOCALHOST=1`, and exact names on `OPENMAIL_INSECURE_IMAP_HOSTS`.
 - Per-user caps: 25 mail accounts and 25 active API keys.
 - CSP, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Permissions-Policy` and `Cross-Origin-Opener-Policy: same-origin` on all responses. HSTS when the request is HTTPS, `OPENMAIL_PUBLIC_URL` is `https://…`, or (with `OPENMAIL_TRUST_PROXY=1`) `X-Forwarded-Proto: https`.
+
+## Password reset and aggregate counters
+
+`/forgot` and `/reset` GET/POST forms use pre-session CSRF protection. Forgot responses are neutral for known and unknown addresses; lookup and delivery run asynchronously after the response. Requests are limited to 5 per IP per 15 minutes and 3 per email per hour. Reset POSTs are limited to 10 per IP per 15 minutes. Email is sent only on request, through the operator's dedicated system SMTP configuration, with certificate verification and required TLS (implicit or STARTTLS), never through a user's mailbox. Without configuration, no token is created and the form points to support.
+
+Reset tokens are 32 random bytes, base64url, stored only as SHA-256 hashes, valid 30 minutes and single use. A new token invalidates earlier unused tokens; expired rows are pruned on startup and issuance. Links put the code in `/reset#token=…`: fragments never reach the server, access logs or Referer. A same-origin script copies it into the POST form and clears the fragment; without JavaScript the user can paste the code from the email. Password replacement, token consumption and deletion of all web sessions are transactional, with expiry and reuse checked after Argon2 hashing. API keys and OAuth grants remain valid, as with admin `set-password`.
+
+Daily aggregate counters (migration 004) count mailbox tests/saves by preset and safe outcome, tool calls by tool/outcome and duration bucket, login/signup/reset outcomes, and per-key MCP 429s. They have no per-event rows or personal data: no emails, hosts, usernames, IPs, user/account ids, passwords, tokens, folders, searches or message content. Closed vocabularies prevent accidental identifying metric dimensions. Writes are best effort and never fail a request. Rows older than the retained 400 UTC calendar days are pruned at startup. Single-user mode has a no-op recorder. `admin metrics` reads sorted aggregates.
+
+Mailbox library failures are classified before discarding raw errors into auth_failed, timeout, tls, host_not_found, connection_refused, imap_disabled, host_not_allowed or unknown. Classification uses structured error fields first and server response text as a fallback, without matching arbitrary messages that may contain hosts. Form guidance names IMAP/SMTP and provider tips without raw response text or identifying connection details. Database, limit and conflict failures are not counted as connection failures.
 
 ## OAuth 2.1 (sign in with OpenMail)
 
@@ -48,7 +58,8 @@
 ## MCP
 
 - Bearer token required on `/mcp` (API key or OAuth access token). Unknown, expired or revoked → `401`.
-- Per-key sliding window (60/min) → `429`. More than 30 failed bearer attempts a minute from one client address → `429`. Bodies over 1 MB → `413`.
+- Per-key sliding window (90/min) → `429`. More than 30 failed bearer attempts a minute from one client address → `429`. Bodies over 1 MB → `413`.
+- IMAP work defaults to 25 s (`OPENMAIL_IMAP_OP_TIMEOUT_MS`, 5000–120000 ms). Search/address fallback/attachment scans and thread reads stop cooperatively with partial results. The gateway closes stalled connections after 5 s grace, including DNS/connect/logout waits, and returns `timeout`.
 - Resource limits: `read_message` fetches at most 10 MB of a message and `read_thread` at most 1 MB per message (100 messages), always as `BODY.PEEK[]<0.n>` partial fetches; a `has_attachment` search checks at most 2,000 messages; tool string inputs have length limits; IMAP connect/greeting timeouts are 15 s and the socket idle timeout is 60 s.
 - Tools are scoped to the authenticated user. Another user’s account id is `not_found`; IMAP is not contacted.
 - Message bodies, subjects, and headers are untrusted third-party content. Tool descriptions and results state that this content is data, not instructions.
@@ -61,7 +72,7 @@
 
 ## Operator CLI
 
-`node dist/cli/admin.js` (inside the container: `docker compose exec -T openmail node dist/cli/admin.js …`). Passwords and keys are read from stdin or `--password-env VAR`, never from argv, and the CLI prints only ids, names and counts. `delete-user --email <e> --yes` removes a user with their sessions, keys and mailboxes. `set-password --email <e>` (new password on stdin) replaces a login password and signs out that user's web sessions; API keys keep working.
+`node dist/cli/admin.js` (inside the container: `docker compose exec -T openmail node dist/cli/admin.js …`). Passwords and keys are read from stdin or `--password-env VAR`, never from argv, and the CLI prints login emails, mailbox names and hosts, ids, presets and counts for operators. These console listings are not application logs; passwords and keys are never printed. `delete-user --email <e> --yes` removes a user with their sessions, keys and mailboxes. `set-password --email <e>` (new password on stdin) replaces a login password and signs out that user's web sessions; API keys keep working.
 
 ## Proxy
 

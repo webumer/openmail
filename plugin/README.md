@@ -55,7 +55,7 @@ Example prompts:
 
 ## Limits
 
-- Requests: 60 per minute per key (HTTP 429 above that).
+- Requests: 90 per minute per key (HTTP 429 above that).
 - Request size: 1 MB (HTTP 413 above that).
 - Search page size: 50 messages; message body 20,000 characters; thread 100 messages / 40,000 characters.
 - Attachments are listed, not downloaded.
