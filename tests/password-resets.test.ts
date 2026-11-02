@@ -122,6 +122,16 @@ describe("password reset forms", () => {
     expect((await t.submit("/forgot", { _csrf: "wrong", email: "ada@example.com" })).status).toBe(403);
   });
 
+  it("does not consume an email's reset quota when the request IP is blocked", async () => {
+    const t = harness();
+    for (let i = 0; i < 5; i++) await t.submit("/forgot", { email: `unknown${i}@example.com` }, "blocked-ip");
+    for (let i = 0; i < 3; i++) await t.submit("/forgot", { email: "ada@example.com" }, "blocked-ip");
+    for (let i = 0; i < 4; i++) await t.submit("/forgot", { email: "ada@example.com" }, `fresh-ip-${i}`);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(t.sent).toHaveLength(3);
+    expect(t.metrics.filter((metric) => metric.outcome === "rate_limited")).toHaveLength(4);
+  });
+
   it("moves the fragment code into a hidden POST field and clears browser history", () => {
     const script = readFileSync(new URL("../src/web/static/app.js", import.meta.url), "utf8");
     const token = "a".repeat(43);
@@ -154,7 +164,8 @@ describe("password reset forms", () => {
     expect((await t.submit("/reset", { token, password: "short", confirm: "short" })).status).toBe(400);
     const changed = await t.submit("/reset", { token, password: NEW_PASSWORD, confirm: NEW_PASSWORD });
     expect(changed.status).toBe(200);
-    expect(changed.body).toContain("Password changed, sign in");
+    expect(changed.body).toContain("Password changed. Sign in again. All web sessions were signed out. Your API keys and connected apps still work — review them on the dashboard.");
+    expect(changed.body).toContain('href="/dashboard"');
     expect(changed.body).toContain('href="/login"');
     for (let i = 0; i < 7; i++) expect((await t.submit("/reset", { token, password: NEW_PASSWORD, confirm: NEW_PASSWORD })).status).toBe(400);
     expect((await t.submit("/reset", { token, password: NEW_PASSWORD, confirm: NEW_PASSWORD })).status).toBe(429);

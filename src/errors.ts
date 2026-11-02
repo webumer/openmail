@@ -5,15 +5,22 @@ export type FailureCategory = (typeof FAILURE_CATEGORIES)[number];
 export function failureCategory(err: unknown): FailureCategory {
   if (err instanceof MailError && err.category) return err.category;
   const raw = err && typeof err === "object" ? err as Record<string, unknown> : {};
-  const text = [raw.code, raw.serverResponseCode, raw.responseCode, raw.responseText, raw.response, raw.message,
-    typeof err === "string" ? err : ""].filter((v) => typeof v === "string" || typeof v === "number").join(" ");
-  if (/blocked_host|insecure_transport|host_not_allowed/i.test(text)) return "host_not_allowed";
+  const code = typeof raw.code === "string" ? raw.code.toUpperCase() : "";
+  const responseCode = String(raw.serverResponseCode ?? raw.responseCode ?? "").toUpperCase();
+  // A syscall errno is safe to recognize in a message; arbitrary message text may be a hostname.
+  const errno = code || /\b(ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ESOCKETTIMEDOUT|ECONNREFUSED|ECONNRESET|ENETUNREACH|EHOSTUNREACH)\b/.exec(errorText(err))?.[1] || "";
+  if (["BLOCKED_HOST", "INSECURE_TRANSPORT", "HOST_NOT_ALLOWED"].includes(code)) return "host_not_allowed";
+  if (["ENOTFOUND", "EAI_AGAIN"].includes(errno)) return "host_not_found";
+  if (["ETIMEDOUT", "ESOCKETTIMEDOUT"].includes(errno)) return "timeout";
+  if (["ECONNREFUSED", "ECONNRESET", "ECONNECTION", "ENETUNREACH", "EHOSTUNREACH"].includes(errno)) return "connection_refused";
+  if (code === "ETLS" || /CERT_|CERTIFICATE|UNABLE_TO_VERIFY|SELF_SIGNED|ERR_TLS|ERR_SSL/.test(code)) return "tls";
+  if (responseCode === "LOGINDISABLED") return "imap_disabled";
+  const text = [raw.responseText, raw.response].filter((value) => typeof value === "string").join(" ");
   if (/application[- ]specific password|app[- ]?password.{0,40}(required|needed)|web login required|imap.{0,30}(disabled|not enabled)|basic.{0,20}auth.{0,60}(disabled|not supported|not allowed)|SmtpClientAuthentication.{0,30}disabled|user is authenticated but not connected|authentication.{0,20}(disabled|not supported)|password.{0,20}(sign-in|authentication).{0,30}(disabled|not supported)|AUTHENTICATE failed.*outlook|LOGIN disabled|logindisabled/i.test(text)) return "imap_disabled";
-  if (/CERT_|CERTIFICATE|UNABLE_TO_VERIFY|SELF_SIGNED|ERR_TLS|SSL|TLS|certificate|hostname\/ip does not match/i.test(text)) return "tls";
-  if (/ENOTFOUND|EAI_AGAIN|getaddrinfo|host could not be resolved/i.test(text)) return "host_not_found";
-  if (/ETIMEDOUT|ESOCKETTIMEDOUT|timed? ?out|timeout|greeting never received/i.test(text)) return "timeout";
-  if (/ECONNREFUSED|ECONNRESET|ECONNECTION|ENETUNREACH|EHOSTUNREACH/i.test(text)) return "connection_refused";
-  if (raw.authenticationFailed === true || /EAUTH|AUTHENTICATIONFAILED|Invalid (credentials|login)|LOGIN failed|AUTHENTICATE failed|auth(entication)? failed|535[ -]|Command failed/i.test(text)) return "auth_failed";
+  if (raw.authenticationFailed === true || code === "EAUTH" || responseCode === "AUTHENTICATIONFAILED" || responseCode === "535") return "auth_failed";
+  if (/SSL|TLS|certificate|hostname\/ip does not match/i.test(text)) return "tls";
+  if (/timed? ?out|timeout|greeting never received/i.test(text)) return "timeout";
+  if (/AUTHENTICATIONFAILED|Invalid (credentials|login)|LOGIN failed|AUTHENTICATE failed|auth(entication)? failed|535[ -]/i.test(text)) return "auth_failed";
   return "unknown";
 }
 
@@ -45,21 +52,23 @@ export function toMailError(err: unknown, secret?: string): MailError {
     const scrubbed = scrubSecret(err.message, secret);
     return new MailError(err.code, scrubbed, failureCategory(err));
   }
-  const message = scrubSecret(errorText(err), secret);
-  if (/does(?:n't| not) exist|NONEXISTENT|NoSuchMailbox|unknown mailbox|mailbox not found/i.test(message)) {
+  const raw = err && typeof err === "object" ? err as Record<string, unknown> : {};
+  const response = [raw.responseText, raw.response].filter((value) => typeof value === "string").join(" ");
+  if ([raw.code, raw.serverResponseCode].some((value) => value === "NONEXISTENT" || value === "NoSuchMailbox") ||
+    /does(?:n't| not) exist|NONEXISTENT|NoSuchMailbox|unknown mailbox|mailbox not found/i.test(response)) {
     return new MailError("not_found", "Mailbox was not found");
   }
   // Syscall text often embeds host:port; keep that out of tool results.
-  return new MailError("imap_error", classifyImapFailure(message), failureCategory(err));
+  return new MailError("imap_error", classifyImapFailure(failureCategory(err)), failureCategory(err));
 }
 
-/** SMTP library failures become one of four short messages. Secrets are scrubbed first. */
+/** SMTP library failures become one of four short messages; raw library text is discarded. */
 export function toSmtpError(err: unknown, secrets: readonly (string | undefined)[] = []): MailError {
   if (err instanceof MailError) {
     const message = scrubSecrets(err.message, secrets);
     return new MailError(err.code, message, failureCategory(err));
   }
-  return new MailError("smtp_error", classifySmtpFailure(scrubSecrets(errorText(err), secrets)), failureCategory(err));
+  return new MailError("smtp_error", classifySmtpFailure(failureCategory(err)), failureCategory(err));
 }
 
 function scrubSecrets(message: string, secrets: readonly (string | undefined)[]): string {
@@ -68,34 +77,25 @@ function scrubSecrets(message: string, secrets: readonly (string | undefined)[])
   return out;
 }
 
-function classifySmtpFailure(message: string): string {
-  if (/certificate|UNABLE_TO_VERIFY|self[- ]signed|hostname\/ip does not match|unable to verify the first certificate/i.test(message)) {
-    return "TLS verification failed for the SMTP server";
-  }
-  if (/ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|ENOTFOUND|ETIMEDOUT|ESOCKETTIMEDOUT|getaddrinfo|timed out|Greeting never received/i.test(message)) {
-    return "Could not reach the SMTP server";
-  }
-  if (/EAUTH|Invalid login|authentication failed|535[ -]/i.test(message)) {
-    return "SMTP sign-in failed";
-  }
+function classifySmtpFailure(category: FailureCategory): string {
+  if (category === "tls") return "TLS verification failed for the SMTP server";
+  if (["host_not_found", "timeout", "connection_refused"].includes(category)) return "Could not reach the SMTP server";
+  if (category === "auth_failed" || category === "imap_disabled") return "SMTP sign-in failed";
   return "The SMTP server rejected the message";
 }
 
-function classifyImapFailure(message: string): string {
-  if (/ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|ENOTFOUND|getaddrinfo/i.test(message)) {
-    return "Could not reach the IMAP server";
-  }
-  if (/ETIMEDOUT|ESOCKETTIMEDOUT|Timeout|timed out/i.test(message)) {
-    return "The IMAP server timed out";
-  }
-  if (/certificate|SSL|TLS|UNABLE_TO_VERIFY|hostname\/ip does not match/i.test(message)) {
-    return "TLS verification failed for the IMAP server";
-  }
-  if (/AUTHENTICATIONFAILED|Invalid credentials|LOGIN failed|AUTHENTICATE failed|auth failed/i.test(message)) {
-    return "IMAP sign-in failed";
-  }
-  if (/Command failed/i.test(message)) {
-    return "IMAP sign-in failed";
-  }
+function classifyImapFailure(category: FailureCategory): string {
+  if (category === "host_not_found" || category === "connection_refused") return "Could not reach the IMAP server";
+  if (category === "timeout") return "The IMAP server timed out";
+  if (category === "tls") return "TLS verification failed for the IMAP server";
+  if (category === "auth_failed" || category === "imap_disabled") return "IMAP sign-in failed";
   return "IMAP request failed";
+}
+
+/** Operator diagnostics retain main's Error messages, plus the error name and code. */
+export function operatorErrorText(err: unknown, fallback: string): string {
+  if (err instanceof MailError) return err.message;
+  if (!(err instanceof Error)) return fallback;
+  const code = "code" in err && (typeof err.code === "string" || typeof err.code === "number") ? ` (${err.code})` : "";
+  return `${err.name}${code}: ${err.message}`;
 }

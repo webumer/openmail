@@ -1,5 +1,5 @@
 import { isIP } from "node:net";
-import { MailError, failureCategory } from "../errors.js";
+import { MailError } from "../errors.js";
 import { defaultResolver, isPrivateAddress, type Resolver } from "../mail/address-guard.js";
 
 export { isPrivateAddress, type Resolver };
@@ -29,14 +29,15 @@ export async function checkCustomHostFailure(
     return new MailError("blocked_host", `${input.kind} port must be one of ${allowedPorts.join(", ")}`, "host_not_allowed");
   }
   // Never include the queried name or resolved addresses in guard messages.
-  const refused = `${input.kind} host must be a public internet address`;
+  // Keep DNS failures indistinguishable from private addresses, including in metrics.
+  const refused = "Use a public mail server address";
   let addresses: string[];
   try {
     addresses = isIP(host) ? [host] : await resolve(host);
-  } catch (err) {
-    return new MailError("blocked_host", refused, failureCategory(err) === "unknown" ? "host_not_found" : failureCategory(err));
+  } catch {
+    return new MailError("blocked_host", refused, "host_not_allowed");
   }
-  if (addresses.length === 0) return new MailError("blocked_host", refused, "host_not_found");
+  if (addresses.length === 0) return new MailError("blocked_host", refused, "host_not_allowed");
   if (addresses.some(isPrivateAddress)) return new MailError("blocked_host", refused, "host_not_allowed");
   return null;
 }

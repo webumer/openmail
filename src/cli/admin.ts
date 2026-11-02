@@ -13,7 +13,7 @@ import { aggregateMetrics, createMetricRecorder, METRIC_KINDS, recordMetric, typ
 import { setupFailureMessage } from "../mail/setup-help.js";
 import { loadMasterKey } from "../crypto/index.js";
 import { migrate, openDatabase, resolveDatabasePath } from "../db/index.js";
-import { MailError, toMailError, toSmtpError, failureCategory } from "../errors.js";
+import { MailError, toMailError, toSmtpError, failureCategory, operatorErrorText } from "../errors.js";
 import { createImapGateway, isAllowlistedInsecureHost, parseInsecureImapHosts, parseInsecureSmtpHosts, type ImapGateway } from "../mail/index.js";
 import { createSmtpGateway, type SmtpGateway } from "../mail/smtp-gateway.js";
 import { SqliteCredentialStore } from "../store/sqlite-store.js";
@@ -115,28 +115,28 @@ export async function runAdmin(argv: readonly string[], deps: AdminDeps, io: Adm
            FROM users u ORDER BY u.created_at`,
         )
         .all() as Array<{ id: string; email: string; accounts: number; keys: number }>;
-      for (const row of rows) io.out(`${row.id}\taccounts=${row.accounts}\tactive_keys=${row.keys}`);
+      for (const row of rows) io.out(`${row.email}\t${row.id}\taccounts=${row.accounts}\tactive_keys=${row.keys}`);
       io.out(`users=${rows.length}`);
       return;
     }
     case "create-user": {
       const password = await io.readSecret();
       const user = await users.create(deps.db, deps.masterKey, { email: text("email"), password });
-      io.out(`created user ${user.id}`);
+      io.out(`created user ${user.email} ${user.id}`);
       return;
     }
     case "set-password": {
       const password = await io.readSecret();
       const email = text("email");
       const changed = await users.setPassword(deps.db, { email, password });
-      io.out(`password updated for ${changed.id} (sessions signed out=${changed.sessions})`);
+      io.out(`password updated for ${email.toLowerCase()} ${changed.id} (sessions signed out=${changed.sessions})`);
       return;
     }
     case "list-accounts": {
       const userId = userIdFor(deps.db, text("user"));
       const rows = mailAccounts.list(deps.db, userId);
       for (const row of rows) {
-        io.out(`${row.id}\t${row.preset}\tsending=${row.sendEnabled ? "on" : "off"}`);
+        io.out(`${row.name}\t${row.id}\t${row.preset}\t${row.imapHost}\tsending=${row.sendEnabled ? "on" : "off"}`);
       }
       io.out(`accounts=${rows.length}`);
       return;
@@ -166,12 +166,12 @@ export async function runAdmin(argv: readonly string[], deps: AdminDeps, io: Adm
         const username = optional("username") ?? email;
         const name = text("name");
         if (flags.get("skip-probe") !== true) {
-          await probe(deps.imap, deps.smtp ?? createSmtpGateway(), {
+          await probe(deps.imap, {
             name, email, username, password, preset,
             ...(zohoRegion ? { zohoRegion } : {}),
             ...(custom ? { custom, insecureImapHosts, insecureSmtpHosts } : {}),
           });
-          io.out("imap and smtp login ok");
+          io.out("imap login ok");
         }
         const added = mailAccounts.add(deps.db, deps.masterKey, {
           userId, name, email, username, preset, password,
@@ -180,10 +180,11 @@ export async function runAdmin(argv: readonly string[], deps: AdminDeps, io: Adm
             smtpHost: custom.host, smtpPort: 3025, smtpSecure: false, smtpStarttls: false } : {}),
         });
         recordMetric(metrics, { kind: "mailbox_save", name: preset, outcome: "ok" });
-        io.out(`added account ${added.id}`);
+        io.out(`added account ${added.name} ${added.id}`);
       } catch (err) {
-        const part = err instanceof MailboxConnectionError ? err.part.toLowerCase() : "imap";
-        recordMetric(metrics, { kind: "mailbox_save", name: preset, outcome: `${part}:${failureCategory(err)}` });
+        if (err instanceof MailboxConnectionError || (err instanceof MailError && err.category === "host_not_allowed")) {
+          recordMetric(metrics, { kind: "mailbox_save", name: preset, outcome: `imap:${failureCategory(err)}` });
+        }
         throw err;
       }
       return;
@@ -196,7 +197,7 @@ export async function runAdmin(argv: readonly string[], deps: AdminDeps, io: Adm
       if (!row) throw new MailError("not_found", "Account was not found");
       if (command === "disable-sending") {
         mailAccounts.setSendEnabled(deps.db, userId, row.id, false);
-        io.out(`sending off ${row.id}`);
+        io.out(`sending off ${row.name}`);
         return;
       }
       if (flags.get("skip-probe") !== true) {
@@ -218,14 +219,14 @@ export async function runAdmin(argv: readonly string[], deps: AdminDeps, io: Adm
         io.out("smtp login ok");
       }
       mailAccounts.setSendEnabled(deps.db, userId, row.id, true);
-      io.out(`sending on ${row.id}`);
+      io.out(`sending on ${row.name}`);
       return;
     }
     case "import-key": {
       const userId = userIdFor(deps.db, text("user"));
       const token = await io.readSecret();
       const imported = apiKeys.importToken(deps.db, { userId, name: text("name"), token });
-      io.out(`imported key ${imported.id}`);
+      io.out(`imported key ${imported.name} ${imported.id}`);
       return;
     }
     case "delete-user": {
@@ -234,7 +235,7 @@ export async function runAdmin(argv: readonly string[], deps: AdminDeps, io: Adm
       const userId = userIdFor(deps.db, email);
       const removed = users.remove(deps.db, userId);
       io.out(
-        `deleted user ${userId} (accounts=${removed.accounts} keys=${removed.keys} sessions=${removed.sessions})`,
+        `deleted user ${email.trim().toLowerCase()} ${userId} (accounts=${removed.accounts} keys=${removed.keys} sessions=${removed.sessions})`,
       );
       return;
     }
@@ -253,7 +254,6 @@ function userIdFor(db: Database, email: string): string {
 
 async function probe(
   imap: ImapGateway,
-  smtp: SmtpGateway,
   input: {
     name: string;
     email: string;
@@ -290,7 +290,7 @@ async function probe(
     ...(input.insecureSmtpHosts ? { insecureSmtpHosts: input.insecureSmtpHosts } : {}),
   };
   try {
-    await testConnection(credentials, imap, smtp);
+    await testConnection(credentials, imap);
   } catch (err) {
     const mail = toMailError(err, input.password);
     const part = err instanceof MailboxConnectionError ? err.part : "IMAP";
@@ -307,19 +307,24 @@ async function readStdinSecret(): Promise<string> {
   return Buffer.concat(chunks).toString("utf8").replace(/\r?\n$/, "");
 }
 
+async function main(): Promise<void> {
+  const db = openDatabase(resolveDatabasePath(process.env));
+  try {
+    migrate(db);
+    await runAdmin(
+      process.argv.slice(2),
+      { db, masterKey: loadMasterKey(process.env.OPENMAIL_MASTER_KEY), imap: createImapGateway() },
+      { readSecret: readStdinSecret, env: process.env, out: (line) => console.log(line) },
+    );
+  } finally {
+    db.close();
+  }
+}
+
 const invoked = process.argv[1];
 if (invoked && import.meta.url === pathToFileURL(invoked).href) {
-  const db = openDatabase(resolveDatabasePath(process.env));
-  migrate(db);
-  runAdmin(
-    process.argv.slice(2),
-    { db, masterKey: loadMasterKey(process.env.OPENMAIL_MASTER_KEY), imap: createImapGateway() },
-    { readSecret: readStdinSecret, env: process.env, out: (line) => console.log(line) },
-  )
-    .then(() => db.close())
-    .catch((err: unknown) => {
-      db.close();
-      console.error(err instanceof MailError ? err.message : "Admin command failed");
-      process.exit(1);
-    });
+  main().catch((err: unknown) => {
+    console.error(operatorErrorText(err, "Admin command failed"));
+    process.exit(1);
+  });
 }

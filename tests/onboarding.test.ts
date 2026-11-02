@@ -170,9 +170,14 @@ describe("onboarding and MCP metrics", () => {
       for (const path of ["/accounts/test", "/accounts"]) {
         for (part of ["IMAP", "SMTP", "ok"]) {
           const call = httpFake(path, { method: "POST", cookie: `om_session=${session.token}`, fields: { _csrf: session.csrfSecret,
-            name: `${path}-${part}`, email: "mailbox@example.com", password: account.password, preset: "gmail" } });
+            name: `${path}-${part}`, email: "mailbox@example.com", password: account.password, preset: "gmail", smtp_host: "smtp.gmail.com" } });
           await handler(call.req, call.res);
-          expect(call.state.status).toBe(part === "ok" ? (path === "/accounts" ? 303 : 200) : 400);
+          expect(call.state.status).toBe(part === "IMAP" ? 400 : part === "SMTP" ? (path === "/accounts" ? 200 : 400) : (path === "/accounts" ? 303 : 200));
+          if (part === "SMTP") {
+            expect(call.state.body).toContain("Reading works");
+            expect(call.state.body).toContain("Sending would not work");
+            expect(call.state.body).toContain("SMTP:");
+          }
           expect(call.state.body).not.toContain("private.example.com");
           expect(call.state.body).not.toContain(account.password);
         }

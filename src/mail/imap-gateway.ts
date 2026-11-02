@@ -116,6 +116,13 @@ async function run<T>(
 ): Promise<T> {
   const deadline = createDeadline({ timeoutMs });
   let client: ImapClient | undefined;
+  let closed = false;
+  const close = () => {
+    if (client && !closed) {
+      closed = true;
+      safeClose(client);
+    }
+  };
   let timedOut = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = () => new MailError("timeout", "The mail server took too long. Try a narrower search or try again later.", "timeout");
@@ -131,30 +138,33 @@ async function run<T>(
       if (timedOut) throw timeout();
       return await fn(createSession(client, deadline), client);
     } catch (err) {
-      if (client) safeClose(client);
+      close();
       throw toMailError(err, account.password);
     } finally {
-      if (client) {
-        if (timedOut) safeClose(client);
+      if (client && !closed) {
+        if (timedOut) close();
         else {
           try {
             await client.logout();
           } catch {
-            safeClose(client);
+            close();
           }
         }
       }
     }
   };
+  const working = work();
+  // The socket may reject pending work after the hard timeout has already returned.
+  void working.catch(() => {});
   try {
     return await Promise.race([
-      work(),
+      working,
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => {
           timedOut = true;
           // Reject first, so any synchronous close-induced error cannot replace timeout.
           reject(timeout());
-          if (client) safeClose(client);
+          close();
         }, timeoutMs + graceMs);
       }),
     ]);

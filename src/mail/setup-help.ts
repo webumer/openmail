@@ -17,7 +17,7 @@ const HELP: Record<FailureCategory, string> = {
   host_not_found: "The server address could not be resolved. Check the server name and try again.",
   connection_refused: "The connection was refused or interrupted. Check the server name, port and your provider's mail access settings.",
   imap_disabled: "Your provider requires an app password, web sign-in or permission to use mail apps. Enable IMAP access if available; password sign-in may be disabled by your provider.",
-  host_not_allowed: "The host or transport is not allowed. Use a public mail server and TLS on a supported port.",
+  host_not_allowed: "Use a public mail server address and TLS on a supported port.",
   unknown: "The connection failed. Check the server, port, TLS, username and password, then try again.",
 };
 

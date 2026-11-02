@@ -63,7 +63,7 @@ npm run build
 npm start
 ```
 
-Open `http://127.0.0.1:8080/`, sign up, add a mailbox (presets auto-fill host/port; “Test connection” checks IMAP and SMTP sign-in before save), create an API key, and copy the key once from the reveal page.
+Open `http://127.0.0.1:8080/`, sign up, add a mailbox (presets auto-fill host/port; “Test connection” checks IMAP and SMTP sign-in; Save requires IMAP and shows a warning if the optional SMTP check fails), create an API key, and copy the key once from the reveal page.
 
 | Variable | Purpose |
 | --- | --- |

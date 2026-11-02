@@ -141,7 +141,7 @@ describe("message size limits", () => {
 describe("IMAP error messages", () => {
   it("does not echo host, port or syscall text", () => {
     expect(toMailError(new Error("connect ECONNREFUSED 10.0.0.5:993")).message).toBe("Could not reach the IMAP server");
-    expect(toMailError(new Error("Hostname/IP does not match certificate's altnames: Host: x")).message).toBe(
+    expect(toMailError(Object.assign(new Error("Hostname/IP does not match certificate's altnames: Host: x"), { code: "ERR_TLS_CERT_ALTNAME_INVALID" })).message).toBe(
       "TLS verification failed for the IMAP server",
     );
     const scrubbed = toMailError(new Error("fetch failed secret-value"), "secret-value");
@@ -234,7 +234,7 @@ describe("per-user caps, deletion and crypto", () => {
     expect(apiKeys.resolve(db, key.token)).not.toBeNull();
     await runAdmin(["delete-user", "--email", "cap@example.com", "--yes"], deps, io);
     expect(lines.at(-1)).toMatch(/deleted user .*accounts=1 keys=1/);
-    expect(lines.at(-1)).not.toContain("cap@example.com");
+    expect(lines.at(-1)).toBe(`deleted user cap@example.com ${user.id} (accounts=1 keys=1 sessions=0)`);
     expect(apiKeys.resolve(db, key.token)).toBeNull();
     expect(await new SqliteCredentialStore(db, masterKey).getAccount(user.id, added.id)).toBeNull();
     expect(db.prepare("SELECT COUNT(*) AS n FROM users").get()).toEqual({ n: 0 });

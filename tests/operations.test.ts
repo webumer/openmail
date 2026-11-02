@@ -2,7 +2,7 @@ import { ADDRESS_SCAN_CAP, MESSAGE_SOURCE_CAP_BYTES } from "../src/mail/constant
 import { describe, expect, it } from "vitest";
 import { MailError } from "../src/errors.js";
 import { UNTRUSTED_CONTENT_WARNING } from "../src/mail/constants.js";
-import { decodeCursor } from "../src/mail/cursor.js";
+import { decodeCursor, encodeCursor } from "../src/mail/cursor.js";
 import type { ImapGateway } from "../src/mail/imap-gateway.js";
 import {
   listAccounts,
@@ -179,7 +179,7 @@ describe("read-only mail operations", () => {
     expect(none.ok && none.data.messages).toEqual([]);
   });
 
-  it("keeps the other filters server-side, fetches only envelopes, pages, and flags a capped scan", async () => {
+  it("keeps other filters server-side, reuses fetched metadata, pages, and flags a capped scan", async () => {
     const { deps, session } = harness();
     const total = ADDRESS_SCAN_CAP + 5;
     session.search = async (query) => {
@@ -202,10 +202,11 @@ describe("read-only mail operations", () => {
     expect(second.since).toBeInstanceOf(Date);
     expect(second.before).toBeInstanceOf(Date);
     expect(second.from).toBeUndefined();
-    expect(session.fetches[0]).toEqual({ envelope: true });
+    expect(session.fetches[0]).toMatchObject({ envelope: true, bodyStructure: true });
+    expect(session.fetches[0]?.source).toBeUndefined();
     expect(first.ok && first.data.messages.map((m) => m.uid)).toEqual([total, total - 1]);
     // Stopped after a page plus one match: only the first chunk of envelopes was fetched.
-    expect(session.fetches.filter((f) => f.envelope && Object.keys(f).length === 1)).toHaveLength(1);
+    expect(session.fetches).toHaveLength(1);
     expect(first.ok && first.truncated).toBe(false);
     const cursor = first.ok ? first.data.next_cursor : null;
     expect(cursor).toBeTruthy();
@@ -306,29 +307,125 @@ describe("read-only mail operations", () => {
     expect(session.fetches).toHaveLength(1);
   });
 
-  it("returns partial search after a slow initial search without starting more IMAP commands", async () => {
+  it("fetches the first page after a slow initial search and advances the cursor", async () => {
     const { deps, session } = harness();
     let now = 0;
-    session.search = async () => { now = 10; return [1, 2, 3]; };
-    const result = await searchMessages({ ...deps, deadline: { timeoutMs: 10, now: () => now } }, "user-1", "work");
-    expect(result).toMatchObject({ ok: true, truncated: true, data: { messages: [] } });
-    expect(session.fetches).toHaveLength(0);
-    expect(result.ok && decodeCursor(result.data.next_cursor!)).toMatchObject({ uid: 4 });
+    for (const uid of [1, 2, 3]) session.messages.set(uid, fetched({ uid }));
+    session.search = async () => { now += 10; return [1, 2, 3]; };
+    const timed = { ...deps, deadline: { timeoutMs: 10, now: () => now } };
+    const result = await searchMessages(timed, "user-1", "work", { limit: 2 });
+    expect(result).toMatchObject({ ok: true, truncated: true });
+    if (!result.ok) return;
+    expect(result.data.messages.map((m) => m.uid)).toEqual([3, 2]);
+    expect(session.fetches).toHaveLength(1);
+    expect(decodeCursor(result.data.next_cursor!)).toMatchObject({ uid: 2 });
+    const next = await searchMessages(timed, "user-1", "work", { limit: 2, cursor: result.data.next_cursor! });
+    expect(next.ok && next.data.messages.map((m) => m.uid)).toEqual([1]);
+    expect(next.ok && decodeCursor(next.data.next_cursor!)).toMatchObject({ uid: 1 });
+    const end = await searchMessages(timed, "user-1", "work", { cursor: encodeCursor({ v: 1, offset: 0, uid: 1 }) });
+    expect(end).toMatchObject({ ok: true, truncated: true, data: { messages: [], next_cursor: null } });
+    expect(end.warnings.join(" ")).toContain("mail server was slow");
   });
 
   it("returns fetched thread messages when the budget expires between batches", async () => {
     const { deps, session } = harness();
     let now = 0;
     session.capabilities.add("THREAD=REFS");
-    session.threadResult = Array.from({ length: 12 }, (_, i) => i + 1);
+    session.threadResult = Array.from({ length: 60 }, (_, i) => i + 1);
     for (const uid of session.threadResult) session.messages.set(uid, message(uid, `<${uid}@example.com>`, "Wed, 21 Oct 2026 10:00:00 +0000", `body ${uid}`));
     const fetchAll = session.fetchAll.bind(session);
     session.fetchAll = async (uids, query) => { now += 10; return fetchAll(uids, query); };
     const result = await readThread({ ...deps, deadline: { timeoutMs: 10, now: () => now } }, "user-1", "work", "INBOX", 1);
     expect(result).toMatchObject({ ok: true, truncated: true });
-    expect(result.ok && result.data.messages).toHaveLength(5);
+    expect(result.ok && result.data.messages).toHaveLength(26);
     expect(result.warnings.join(" ")).toContain("mail server was slow");
+    expect(session.fetches).toHaveLength(2);
+  });
+
+  it.each([undefined, false])("retains fallback matches and resumes after the last scanned UID (attachments=%s)", async (has_attachment) => {
+    const { deps, session } = harness();
+    let now = 0;
+    for (let uid = 1; uid <= 500; uid++) {
+      session.messages.set(uid, fetched({ uid, envelope: { from: [{ address: uid === 500 || uid === 300 ? "wanted@example.com" : "other@example.com" }] } }));
+    }
+    session.search = async (query) => query.from ? [] : [...session.messages.keys()];
+    const fetchAll = session.fetchAll.bind(session);
+    session.fetchAll = async (uids, query) => { now += 10; return fetchAll(uids, query); };
+    const timed = { ...deps, deadline: { timeoutMs: 10, now: () => now } };
+    const result = await searchMessages(timed, "user-1", "work", { from: "wanted", has_attachment });
+    expect(result).toMatchObject({ ok: true, truncated: true });
+    if (!result.ok) return;
+    expect(result.data.messages.map((m) => m.uid)).toEqual([500]);
+    expect(decodeCursor(result.data.next_cursor!)).toMatchObject({ uid: 301 });
     expect(session.fetches).toHaveLength(1);
+    const next = await searchMessages(timed, "user-1", "work", { from: "wanted", has_attachment, cursor: result.data.next_cursor! });
+    expect(next.ok && next.data.messages.map((m) => m.uid)).toEqual([300]);
+    expect(next.ok && decodeCursor(next.data.next_cursor!).uid).toBeLessThan(301);
+  });
+
+  it("scans the first attachment chunk after a slow SEARCH and advances even without matches", async () => {
+    const { deps, session } = harness();
+    let now = 0;
+    for (let uid = 1; uid <= 100; uid++) session.messages.set(uid, fetched({ uid }));
+    session.search = async () => { now += 10; return [...session.messages.keys()]; };
+    const timed = { ...deps, deadline: { timeoutMs: 10, now: () => now } };
+    const result = await searchMessages(timed, "user-1", "work", { has_attachment: true });
+    expect(result).toMatchObject({ ok: true, truncated: true, data: { messages: [] } });
+    if (!result.ok) return;
+    expect(decodeCursor(result.data.next_cursor!)).toMatchObject({ uid: 51 });
+    expect(session.fetches).toHaveLength(1);
+    const next = await searchMessages(timed, "user-1", "work", { has_attachment: true, cursor: result.data.next_cursor! });
+    expect(next.ok && decodeCursor(next.data.next_cursor!)).toMatchObject({ uid: 1 });
+    const end = await searchMessages(timed, "user-1", "work", { has_attachment: true, cursor: encodeCursor({ v: 1, offset: 0, uid: 1 }) });
+    expect(end).toMatchObject({ ok: true, data: { messages: [], next_cursor: null } });
+    expect(end.warnings.join(" ")).toContain("mail server was slow");
+  });
+
+  it("scans fallback candidates once even if the second SEARCH exhausts the deadline", async () => {
+    const { deps, session } = harness();
+    let now = 0;
+    session.messages.set(3, fetched({ uid: 3, envelope: { from: [{ address: "wanted@example.com" }] } }));
+    session.search = async (query) => { if (query.from) return []; now = 10; return [3]; };
+    const result = await searchMessages({ ...deps, deadline: { timeoutMs: 10, now: () => now } }, "user-1", "work", { from: "wanted" });
+    expect(result.ok && result.data.messages.map((m) => m.uid)).toEqual([3]);
+    expect(result.ok && decodeCursor(result.data.next_cursor!)).toMatchObject({ uid: 3 });
+    expect(session.fetches).toHaveLength(1);
+  });
+
+  it.each([false, true])("always fetches the requested thread message first after a slow connect (exists=%s)", async (exists) => {
+    const { deps, session } = harness();
+    let now = 0;
+    const withMailbox = deps.imap.withMailbox.bind(deps.imap);
+    deps.imap.withMailbox = async (...args) => { now = 10; return withMailbox(...args); };
+    if (exists) session.messages.set(99, message(99, "<99@example.com>", "Wed, 21 Oct 2026 10:00:00 +0000", "requested"));
+    const result = await readThread({ ...deps, deadline: { timeoutMs: 10, now: () => now } }, "user-1", "work", "INBOX", 99);
+    if (exists) {
+      expect(result).toMatchObject({ ok: true, truncated: true, data: { messages: [{ uid: 99 }] } });
+      expect(result.warnings.join(" ")).toContain("mail server was slow");
+    } else expect(result).toMatchObject({ ok: false, error: { code: "not_found" } });
+    expect(session.fetches).toHaveLength(1);
+    expect(session.threadCalls).toBe(0);
+    expect(session.searches).toHaveLength(0);
+  });
+
+  it("fetches the requested message before slow thread discovery and uses 25-message batches on fast servers", async () => {
+    const { deps, session } = harness();
+    let now = 0;
+    session.capabilities.add("THREAD=REFS");
+    session.threadResult = Array.from({ length: 61 }, (_, index) => index + 1);
+    for (const uid of session.threadResult) session.messages.set(uid, message(uid, `<${uid}@example.com>`, "Wed, 21 Oct 2026 10:00:00 +0000", `body ${uid}`));
+    const fetches: number[][] = [];
+    const fetchAll = session.fetchAll.bind(session);
+    session.fetchAll = async (uids, query) => { fetches.push(uids); return fetchAll(uids, query); };
+    session.thread = async () => { expect(session.fetches).toHaveLength(1); now = 10; return session.threadResult; };
+    const result = await readThread({ ...deps, deadline: { timeoutMs: 10, now: () => now } }, "user-1", "work", "INBOX", 61);
+    expect(result).toMatchObject({ ok: true, truncated: true, data: { messages: [{ uid: 61 }] } });
+    expect(fetches).toEqual([]);
+    session.thread = async () => session.threadResult;
+    const fast = await readThread(deps, "user-1", "work", "INBOX", 61);
+    expect(fast.ok && fast.data.messages).toHaveLength(61);
+    expect(fetches.map((uids) => uids.length)).toEqual([25, 25, 10]);
+    expect(fetches.flat()).not.toContain(61);
   });
 
   it("reads a message with PEEK source, stripped HTML, and no attachment bytes", async () => {

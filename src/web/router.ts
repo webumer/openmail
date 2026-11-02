@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OutgoingHttpHeaders } from "node:http";
 import type Database from "better-sqlite3";
-import { testConnection, MailboxConnectionError } from "../services/mail-accounts.js";
+import { testConnection } from "../services/mail-accounts.js";
 import { createPasswordResetHandler } from "./password-reset.js";
 import type { SystemMailer } from "../services/system-mailer.js";
 import { createMetricRecorder, recordMetric, type MetricRecorder } from "../services/metrics.js";
@@ -74,7 +74,7 @@ export interface WebRuntime {
   probeRateLimit?: { limit: number; windowMs: number };
 }
 
-/** Each test or add verifies IMAP and SMTP sign-in without sending mail. */
+/** Rate-limit connection checks, including optional SMTP verification, without sending mail. */
 export const PROBE_ATTEMPT_LIMIT = 20;
 export const PROBE_ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
 
@@ -378,6 +378,7 @@ async function submitAccount(
     return;
   }
   const parsed = parseAccountForm(fields);
+  const checkSmtp = probeOnly || Boolean(fields.smtp_host?.trim() || parsed.account?.smtpUsername);
   delete fields.password;
   delete fields.smtp_password;
   const notice = noticeFor(url);
@@ -390,29 +391,41 @@ async function submitAccount(
     return;
   }
   const metricKind = probeOnly ? "mailbox_test" : "mailbox_save";
-  const failure = (await hostProblem(handler, parsed.account)) ?? (await connectionProbe(handler, parsed.account));
+  const failure = (await hostProblem(handler, parsed.account, "IMAP")) ?? (await connectionProbe(handler, parsed.account, "IMAP"));
   if (failure) {
     recordMetric(handler.metrics, { kind: metricKind, name: parsed.account.preset, outcome: `${failure.part.toLowerCase()}:${failureCategory(failure.error)}` });
     writeDashboard(res, handler, session, { draft: parsed.draft, errors: [failure.message], notice }, 400);
     return;
   }
+  const smtpFailure = checkSmtp
+    ? (await hostProblem(handler, parsed.account, "SMTP")) ?? (await connectionProbe(handler, parsed.account, "SMTP"))
+    : null;
   if (probeOnly) {
-    recordMetric(handler.metrics, { kind: metricKind, name: parsed.account.preset, outcome: "ok" });
+    recordMetric(handler.metrics, { kind: metricKind, name: parsed.account.preset,
+      outcome: smtpFailure ? `smtp:${failureCategory(smtpFailure.error)}` : "ok" });
     writeDashboard(res, handler, session, {
       draft: parsed.draft,
       notice,
-      probeMessage: "Signed in to IMAP and SMTP. The account was not saved.",
-    });
+      probeMessage: smtpFailure
+        ? `IMAP: Signed in. Reading works. ${smtpFailure.message} Sending would not work. The account was not saved.`
+        : "IMAP: Signed in. SMTP: Signed in. Reading and sending connections work. The account was not saved.",
+      probeWarning: Boolean(smtpFailure),
+    }, smtpFailure ? 400 : 200);
     return;
   }
   try {
     mailAccounts.add(handler.db, handler.masterKey, accountInput(session.userId, parsed.account));
-    recordMetric(handler.metrics, { kind: metricKind, name: parsed.account.preset, outcome: "ok" });
+    recordMetric(handler.metrics, { kind: metricKind, name: parsed.account.preset,
+      outcome: smtpFailure ? `smtp:${failureCategory(smtpFailure.error)}` : "ok" });
   } catch (err) {
-    recordMetric(handler.metrics, { kind: metricKind, name: parsed.account.preset, outcome: "imap:unknown" });
     const message = safeMailMessage(err, parsed.account.password);
     if (!message) throw err;
     writeDashboard(res, handler, session, { draft: parsed.draft, errors: [message], notice }, 400);
+    return;
+  }
+  if (smtpFailure) {
+    writeDashboard(res, handler, session, { draft: emptyAccountDraft(),
+      probeMessage: `Mailbox saved. IMAP: Reading works. ${smtpFailure.message} Sending would not work.`, probeWarning: true });
     return;
   }
   redirect(res, "/dashboard?notice=account-added");
@@ -535,7 +548,7 @@ function writeDashboard(
   res: ServerResponse,
   handler: Handler,
   session: SessionRecord,
-  input: { draft: AccountDraft; errors?: string[]; notice?: string; probeMessage?: string },
+  input: { draft: AccountDraft; errors?: string[]; notice?: string; probeMessage?: string; probeWarning?: boolean },
   status = 200,
 ): void {
   writeHtml(
@@ -553,19 +566,20 @@ function writeDashboard(
       ...(input.errors && input.errors.length > 0 ? { errors: input.errors } : {}),
       ...(input.notice ? { notice: input.notice } : {}),
       ...(input.probeMessage ? { probeMessage: input.probeMessage } : {}),
+      ...(input.probeWarning ? { probeWarning: true } : {}),
     }),
   );
 }
 
 interface ProbeFailure { message: string; part: "IMAP" | "SMTP"; error: MailError }
 
-async function hostProblem(handler: Handler, account: ParsedAccount): Promise<ProbeFailure | null> {
+async function hostProblem(handler: Handler, account: ParsedAccount, part: "IMAP" | "SMTP"): Promise<ProbeFailure | null> {
   if (account.preset !== "custom") return null;
   const checks = [
     { host: account.imapHost ?? "", port: account.imapPort ?? 0, kind: "IMAP" as const },
     { host: account.smtpHost ?? "", port: account.smtpPort ?? 0, kind: "SMTP" as const },
   ];
-  for (const check of checks) {
+  for (const check of checks.filter((check) => check.kind === part)) {
     const problem = await checkCustomHostFailure({ ...check, allowInsecureLocalhost: handler.allowInsecureLocalhost });
     if (problem) {
       return { part: check.kind, error: problem, message: `${problem.message}. ${setupFailureMessage(check.kind, problem, account.preset)}` };
@@ -574,7 +588,7 @@ async function hostProblem(handler: Handler, account: ParsedAccount): Promise<Pr
   return null;
 }
 
-async function connectionProbe(handler: Handler, account: ParsedAccount): Promise<ProbeFailure | null> {
+async function connectionProbe(handler: Handler, account: ParsedAccount, part: "IMAP" | "SMTP"): Promise<ProbeFailure | null> {
   const endpoints = resolveEndpoints({
     preset: account.preset,
     ...(account.zohoRegion ? { zohoRegion: account.zohoRegion } : {}),
@@ -610,11 +624,11 @@ async function connectionProbe(handler: Handler, account: ParsedAccount): Promis
       : {}),
   };
   try {
-    await testConnection(credentials, handler.imap, handler.smtp);
+    if (part === "IMAP") await testConnection(credentials, handler.imap);
+    else await handler.smtp.verify(credentials);
     return null;
   } catch (err) {
-    const mail = toMailError(err, account.password);
-    const part = err instanceof MailboxConnectionError ? err.part : "IMAP";
+    const mail = part === "SMTP" ? toSmtpError(err, [account.password, account.smtpPassword]) : toMailError(err, account.password);
     return { part, error: mail, message: setupFailureMessage(part, mail, account.preset) };
   }
 }

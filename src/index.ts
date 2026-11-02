@@ -14,7 +14,7 @@ import {
   type ServerConfig,
 } from "./config/index.js";
 import { migrate, openDatabase, resolveDatabasePath } from "./db/index.js";
-import { MailError } from "./errors.js";
+import { MailError, operatorErrorText } from "./errors.js";
 import {
   createImapGateway,
   listAccounts,
@@ -68,8 +68,7 @@ export { createWebHandler, resolveSecureCookies };
 const invoked = process.argv[1];
 if (invoked && import.meta.url === pathToFileURL(invoked).href) {
   start().catch((err: unknown) => {
-    if (err instanceof MailError) console.error(err.message);
-    else console.error("OpenMail failed to start");
+    console.error(operatorErrorText(err, "OpenMail failed to start"));
     process.exit(1);
   });
 }

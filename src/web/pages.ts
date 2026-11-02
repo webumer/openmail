@@ -415,7 +415,7 @@ ${signup ? '<p class="fine">By signing up you agree to the <a href="/terms">term
   );
 }
 
-export function resetPage(input: { mode: "forgot" | "reset"; csrf: string; message?: string; errors?: string[] }): string {
+export function resetPage(input: { mode: "forgot" | "reset"; csrf: string; message?: string; errors?: string[]; passwordChanged?: boolean }): string {
   const forgot = input.mode === "forgot";
   const title = forgot ? "Forgot password?" : "Reset password";
   const fields = forgot
@@ -426,6 +426,7 @@ export function resetPage(input: { mode: "forgot" | "reset"; csrf: string; messa
 <label>Confirm password <input name="confirm" type="password" autocomplete="new-password" minlength="10" maxlength="200" required></label>`;
   return layout(`${title} · OpenMail`, `<div class="auth"><div class="card auth-card"><h1>${title}</h1>
 ${input.message ? `<p>${escapeHtml(input.message)}</p>` : ""}${errorBlock(input.errors)}
+${input.passwordChanged ? '<p><a href="/dashboard">Review your API keys and connected apps on the dashboard</a></p>' : ""}
 ${input.message ? "" : `<form class="stack" method="post" action="/${input.mode}">
 <input type="hidden" name="_csrf" value="${escapeHtml(input.csrf)}">${fields}
 <button class="btn btn-primary" type="submit">${forgot ? "Send reset link" : "Change password"}</button></form>`}
@@ -444,9 +445,10 @@ export function dashboardPage(input: {
   errors?: string[];
   notice?: string;
   probeMessage?: string;
+  probeWarning?: boolean;
 }): string {
   const alerts = `${input.notice ? `<div class="notice"><p>${escapeHtml(input.notice)}</p></div>` : ""}${
-    input.probeMessage ? `<div class="notice"><p>${escapeHtml(input.probeMessage)}</p></div>` : ""
+    input.probeMessage ? `<div class="notice${input.probeWarning ? " warn" : ""}" role="status"><p>${escapeHtml(input.probeMessage)}</p></div>` : ""
   }${errorBlock(input.errors)}`;
   return layout(
     "Dashboard · OpenMail",

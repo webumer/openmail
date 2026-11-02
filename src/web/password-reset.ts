@@ -68,9 +68,7 @@ export function createPasswordResetHandler(options: ResetOptions): (req: Incomin
     const ip = clientAddress(req, options.trustProxy);
     if (path === "/forgot") {
       const email = rateLimitEmail(fields.email);
-      const ipOk = requestIps.allow(ip);
-      const emailOk = email ? requestEmails.allow(email) : true;
-      const allowed = ipOk && emailOk;
+      const allowed = requestIps.allow(ip) && (!email || requestEmails.allow(email));
       recordMetric(options.metrics, { kind: "auth", name: "reset_request", outcome: allowed ? (configured ? "ok" : "failed") : "rate_limited" });
       html(res, 200, statusPage("Password reset", configured ? NEUTRAL : UNCONFIGURED));
       // Defer lookup, token creation and delivery until after responding, even for unknown users.
@@ -99,7 +97,8 @@ export function createPasswordResetHandler(options: ResetOptions): (req: Incomin
       if (password !== fields.confirm) throw new MailError("invalid_argument", "Passwords do not match");
       await completePasswordReset(options.db, (fields.token ?? "").trim(), password);
       recordMetric(options.metrics, { kind: "auth", name: "reset_complete", outcome: "ok" });
-      html(res, 200, resetPage({ mode: "reset", csrf, message: "Password changed, sign in. All web sessions have been signed out. Your API keys and connected apps still work." }));
+      html(res, 200, resetPage({ mode: "reset", csrf, passwordChanged: true,
+        message: "Password changed. Sign in again. All web sessions were signed out. Your API keys and connected apps still work — review them on the dashboard." }));
     } catch (err) {
       recordMetric(options.metrics, { kind: "auth", name: "reset_complete", outcome: "failed" });
       const message = err instanceof MailError ? err.message : "The request could not be completed.";

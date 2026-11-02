@@ -26,12 +26,13 @@ export class MailboxConnectionError extends MailError {
 }
 
 /** Test sign-in only; verifying SMTP never sends mail or enables sending. */
-export async function testConnection(account: AccountCredentials, imap: ImapGateway, smtp: SmtpGateway): Promise<void> {
+export async function testConnection(account: AccountCredentials, imap: ImapGateway, smtp?: SmtpGateway): Promise<void> {
   try {
     await imap.withClient(account, async () => undefined);
   } catch (err) {
     throw new MailboxConnectionError("IMAP", toMailError(err, account.password));
   }
+  if (!smtp) return;
   try {
     await smtp.verify(account);
   } catch (err) {
