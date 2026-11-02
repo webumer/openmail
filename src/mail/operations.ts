@@ -1,3 +1,4 @@
+import { createDeadline, type Deadline, type DeadlineOptions } from "./deadline.js";
 import type { AccountCredentials, CredentialStore } from "../store/types.js";
 import { MailError } from "../errors.js";
 import { envelopeAddresses, type MailAddress } from "./addresses.js";
@@ -28,6 +29,7 @@ import { collectThreadIds, limitThreadUids, threadAlgorithm } from "./thread.js"
 export interface MailDeps {
   store: CredentialStore;
   imap: ImapGateway;
+  deadline?: DeadlineOptions;
 }
 
 const READ_FETCH: MessageFetchQuery = {
@@ -208,32 +210,39 @@ export async function searchMessages(
   params: SearchParams = {},
 ): Promise<ToolResult<SearchData>> {
   return guard(async () => {
+    const started = createDeadline(deps.deadline);
     const folder = params.folder === undefined ? "INBOX" : requireFolder(params.folder);
     const limit = normalizeLimit(params.limit);
     const cursor = params.cursor === undefined ? null : decodeCursor(params.cursor);
     const query = buildSearchQuery(params);
     const account = await requireAccount(deps.store, userId, accountId);
     return deps.imap.withMailbox(account, folder, async (session) => {
+      const deadline = session.deadline ?? started;
       const warnings = [UNTRUSTED_CONTENT_WARNING];
-      let uids = uniquePositive(await session.search(query));
+      let uids = deadline.expired() ? [] : uniquePositive(await session.search(query));
+      let fallbackResume: number | undefined;
       let truncated = false;
-      if (uids.length === 0 && (hasText(params.from) || hasText(params.to))) {
-        const fallback = await addressFallback(session, params, limit, cursor, warnings);
+      if (!deadline.expired() && uids.length === 0 && (hasText(params.from) || hasText(params.to))) {
+        const fallback = await addressFallback(session, params, limit, cursor, warnings, deadline);
         uids = fallback.uids;
         truncated = fallback.capped;
+        fallbackResume = fallback.resumeUid;
       }
-      const { page, hasMore, scanCapped } = await collectPage(session, uids, params.has_attachment, limit, cursor);
+      const { page, hasMore, scanCapped, resumeUid } = await collectPage(session, uids, params.has_attachment, limit, cursor, deadline);
       if (scanCapped) {
         warnings.push(
           `Only ${ATTACHMENT_SCAN_CAP} messages were checked for attachments; narrow the search (for example with since/before) to see older ones.`,
         );
       }
+      const slow = deadline.expired();
+      if (slow) warnings.push(deadline.warning);
+      const resume = resumeUid ?? fallbackResume;
       return ok(
         {
           messages: page.map((message) => toSearchHit(message, folder)),
-          next_cursor: nextCursor(cursor, page, hasMore),
+          next_cursor: nextCursor(cursor, page, hasMore || slow) ?? (slow && resume !== undefined ? encodeCursor({ v: 1, offset: 0, uid: resume }) : null),
         },
-        { truncated, warnings },
+        { truncated: truncated || scanCapped || slow, warnings },
       );
     });
   });
@@ -284,18 +293,24 @@ export async function readThread(
   uid: number,
 ): Promise<ToolResult<ThreadData>> {
   return guard(async () => {
+    const started = createDeadline(deps.deadline);
     const path = requireFolder(folder);
     requireUid(uid);
     const account = await requireAccount(deps.store, userId, accountId);
     return deps.imap.withMailbox(account, path, async (session) => {
+      const deadline = session.deadline ?? started;
       const warnings = [UNTRUSTED_CONTENT_WARNING];
-      const resolved = await resolveThreadUids(session, uid, path, warnings);
+      const resolved = await resolveThreadUids(session, uid, path, warnings, deadline);
       const limited = limitThreadUids(resolved, uid, THREAD_MESSAGE_CAP);
       if (limited.truncated) warnings.push(`Thread truncated to ${THREAD_MESSAGE_CAP} messages.`);
-      const fetched = await fetchInOrder(session, limited.uids, THREAD_FETCH);
+      const fetched: FetchedMessage[] = [];
+      // Fetch in small batches so a slow conversation can return already-read messages.
+      for (let index = 0; index < limited.uids.length && !deadline.expired(); index += 5) {
+        fetched.push(...await fetchInOrder(session, limited.uids.slice(index, index + 5), THREAD_FETCH));
+      }
       const partial = fetched.some((message) => sourceTruncated(message, THREAD_SOURCE_CAP_BYTES));
       if (partial) warnings.push(partialWarning(THREAD_SOURCE_CAP_BYTES));
-      if (!fetched.some((message) => message.uid === uid && message.source)) {
+      if (!deadline.expired() && !fetched.some((message) => message.uid === uid && message.source)) {
         throw new MailError("not_found", `Message ${uid} was not found in ${path}`);
       }
       const parsed: ParsedThreadItem[] = [];
@@ -314,6 +329,8 @@ export async function readThread(
         THREAD_CHAR_CAP,
       );
       if (budget.truncated) warnings.push(`Thread body truncated to ${THREAD_CHAR_CAP} characters.`);
+      const slow = deadline.expired();
+      if (slow) warnings.push(deadline.warning);
       return ok(
         {
           folder: path,
@@ -327,7 +344,7 @@ export async function readThread(
             seen: isSeen(item.message.flags),
           })),
         },
-        { truncated: limited.truncated || budget.truncated || partial, warnings },
+        { truncated: limited.truncated || budget.truncated || partial || slow, warnings },
       );
     });
   });
@@ -344,13 +361,16 @@ async function resolveThreadUids(
   seedUid: number,
   folder: string,
   warnings: string[],
+  deadline: Deadline,
 ): Promise<number[]> {
+  if (deadline.expired()) return [seedUid];
   const algorithm = threadAlgorithm(session.capabilities);
   if (algorithm && session.thread) {
     const threaded = await session.thread(algorithm, seedUid);
     if (threaded && threaded.length > 0) return threaded;
     warnings.push("THREAD extension did not return a thread; used header search.");
   }
+  if (deadline.expired()) return [seedUid];
   const seed = await session.fetchOne(seedUid, {
     envelope: true,
     headers: ["message-id", "in-reply-to", "references"],
@@ -369,6 +389,7 @@ async function resolveThreadUids(
   if (allIds.length > ids.length) warnings.push("Thread search used the first 32 message ids.");
   const found = new Set<number>([seedUid]);
   for (const id of ids) {
+    if (deadline.expired()) break;
     const matches = await session.search({
       or: [
         { header: { "message-id": id } },
@@ -410,17 +431,20 @@ async function addressFallback(
   limit: number,
   cursor: CursorPayload | null,
   warnings: string[],
-): Promise<{ uids: number[]; capped: boolean }> {
+  deadline: Deadline,
+): Promise<{ uids: number[]; capped: boolean; resumeUid?: number }> {
   const rest = uniquePositive(await session.search(buildSearchQuery({ ...params, from: undefined, to: undefined })));
   const ordered = sortNewest(rest).filter((uid) => cursor?.uid == null || uid < cursor.uid);
   const scan = ordered.slice(0, ADDRESS_SCAN_CAP);
   const enough = params.has_attachment === undefined ? limit + 1 : Number.POSITIVE_INFINITY;
   const matched: number[] = [];
   const chunkSize = 200;
-  for (let index = 0; index < scan.length && matched.length < enough; index += chunkSize) {
+  let lastScanned: number | undefined;
+  for (let index = 0; index < scan.length && matched.length < enough && !deadline.expired(); index += chunkSize) {
     const chunk = scan.slice(index, index + chunkSize);
     const byUid = new Map((await session.fetchAll(chunk, ADDRESS_FETCH)).map((message) => [message.uid, message]));
     for (const uid of chunk) {
+      lastScanned = uid;
       const envelope = byUid.get(uid)?.envelope;
       if (!envelope) continue;
       if (hasText(params.from) && !addressMatches(envelope.from, params.from)) continue;
@@ -437,7 +461,7 @@ async function addressFallback(
   } else if (matched.length > 0) {
     warnings.push("The mail server's from/to search found nothing, so OpenMail matched names and addresses itself.");
   }
-  return { uids: matched, capped };
+  return { uids: matched, capped, resumeUid: matched.length > 0 ? matched[0]! + 1 : lastScanned };
 }
 
 async function collectPage(
@@ -446,19 +470,25 @@ async function collectPage(
   hasAttachment: boolean | undefined,
   limit: number,
   cursor: CursorPayload | null,
-): Promise<{ page: FetchedMessage[]; hasMore: boolean; scanCapped: boolean }> {
+  deadline: Deadline,
+): Promise<{ page: FetchedMessage[]; hasMore: boolean; scanCapped: boolean; resumeUid?: number }> {
   const ordered = applyCursor(sortNewest(uids), cursor);
   if (hasAttachment === undefined) {
     const window = ordered.slice(0, limit + 1);
+    if (deadline.expired()) return { page: [], hasMore: window.length > 0, scanCapped: false, resumeUid: window[0] === undefined ? undefined : window[0] + 1 };
     const page = await fetchInOrder(session, window.slice(0, limit), SEARCH_FETCH);
     return { page, hasMore: window.length > limit, scanCapped: false };
   }
   const page: FetchedMessage[] = [];
   const chunkSize = 50;
   const scan = ordered.slice(0, ATTACHMENT_SCAN_CAP);
+  let lastScanned: number | undefined;
   for (let index = 0; index < scan.length; index += chunkSize) {
+    if (deadline.expired()) return { page, hasMore: true, scanCapped: false,
+      resumeUid: lastScanned ?? (scan[0] === undefined ? undefined : scan[0] + 1) };
     const chunk = scan.slice(index, index + chunkSize);
     const fetched = await fetchInOrder(session, chunk, SEARCH_FETCH);
+    lastScanned = chunk.at(-1);
     for (const message of fetched) {
       if (hasAttachments(message.bodyStructure) !== hasAttachment) continue;
       if (page.length < limit) page.push(message);

@@ -36,9 +36,11 @@ Only the latest release on `main`, which is what runs at https://mcp.openmail.to
 | Mailbox passwords | AES-256-GCM, with a per-user data key that is itself wrapped by the server master key (envelope encryption, ids bound as AAD) |
 | Optional SMTP password | Same encryption, with a different binding (`account id` + `:smtp`) so it cannot be swapped with the IMAP password |
 | Send log | Time, mailbox label, recipient count, status, message id, and which connection sent it. No body, subject, or addresses. Kept 90 days in multi-user mode. In single-user config mode the send log and the rate limits are in memory only and reset when the process exits. |
+| Password resets | SHA-256 hashes of random 256-bit codes only; valid for 30 minutes and single use. New requests retire older codes. Reset emails are sent only when requested, through a dedicated system sender. Reset links use URL fragments, keeping codes out of GETs and access logs. A reset signs out web sessions while retaining API keys and OAuth grants. |
+| Aggregate daily counters | Counts of mailbox tests/saves, tool outcomes and duration buckets, auth outcomes, and MCP rate-limit rejections. No personal data: no emails, hosts, usernames, IPs, user/account ids, secrets, folders, search terms or content. Kept 400 UTC calendar days; no per-event rows. Single-user mode records none. |
 | Email content | **Not stored.** Messages are fetched from your IMAP server on each request and passed back to your assistant. |
 
-Logs contain no message content, passwords or keys.
+Application logs contain no emails, hosts, usernames, reset tokens, message content, passwords or keys. Reset forms use CSRF protection, neutral responses and rate limits, and deliver email asynchronously.
 
 ## Threat model
 

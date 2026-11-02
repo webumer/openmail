@@ -164,6 +164,10 @@ describe("OAuth 2.1 authorization server", () => {
     // 'self' plus exactly the validated callback origin; never a wildcard or a bare scheme.
     expect(formAction.trim().split(/\s+/)).toEqual(["'self'", new URL(params.redirect_uri as string).origin]);
     const html = await readHtml(page);
+    if (html.includes("You have no mailboxes yet")) {
+      expect(html).toContain("otherwise your assistant will see no mail");
+      expect(html).toContain('href="/dashboard"');
+    }
     const form = new URLSearchParams();
     for (const match of html.matchAll(/<input type="hidden" name="([^"]+)" value="([^"]*)">/g)) {
       form.set(match[1] as string, decodeEntities(match[2] as string));
@@ -273,6 +277,14 @@ describe("OAuth 2.1 authorization server", () => {
       await client.close().catch(() => undefined);
     }
   }
+
+  it("allows consent and returns to the client before a mailbox is connected", async () => {
+    const jar = new CookieJar();
+    await signup(jar, "new@example.com");
+    const registered = await register();
+    const tokens = await fullGrant(jar, registered.client_id as string);
+    expect(await listAccounts(tokens.access)).toEqual({ ok: true, names: [] });
+  });
 
   it("publishes protected resource and authorization server metadata", async () => {
     for (const path of ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"]) {

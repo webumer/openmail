@@ -90,6 +90,7 @@ describe.skipIf(!live)("web accounts against GreenMail", () => {
     expect(dash.status).toBe(200);
     let html = await readHtml(dash);
     const csrf = csrfFromHtml(html);
+    expect(html).toContain("Next step: add your mailbox");
 
     const badPassword = "not-the-greenmail-password";
     const bad = await fetchJar(jar, `${base}/accounts`, {
@@ -110,7 +111,7 @@ describe.skipIf(!live)("web accounts against GreenMail", () => {
     });
     expect(probe.status).toBe(200);
     const probeHtml = await readHtml(probe);
-    expect(probeHtml).toContain("Signed in to IMAP");
+    expect(probeHtml).toContain("Signed in to IMAP and SMTP");
     expect(probeHtml).not.toMatch(/id="mailbox-password"[^>]*value="/);
     expect(mailAccounts.list(db, userIdFromDb()).length).toBe(0);
 
@@ -125,6 +126,7 @@ describe.skipIf(!live)("web accounts against GreenMail", () => {
     const listed = await fetchJar(jar, `${base}/dashboard`);
     html = await readHtml(listed);
     expect(html).toContain("GreenMail");
+    expect(html).not.toContain("Next step: add your mailbox");
     expect(html).toContain("test@example.com");
     expect(html).toContain("127.0.0.1");
     expect(html).not.toContain(USER_PASSWORD);

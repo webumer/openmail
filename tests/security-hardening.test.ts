@@ -233,7 +233,8 @@ describe("per-user caps, deletion and crypto", () => {
     await expect(runAdmin(["delete-user", "--email", "cap@example.com"], deps, io)).rejects.toThrow(/--yes/);
     expect(apiKeys.resolve(db, key.token)).not.toBeNull();
     await runAdmin(["delete-user", "--email", "cap@example.com", "--yes"], deps, io);
-    expect(lines.at(-1)).toMatch(/deleted user cap@example.com .*accounts=1 keys=1/);
+    expect(lines.at(-1)).toMatch(/deleted user .*accounts=1 keys=1/);
+    expect(lines.at(-1)).not.toContain("cap@example.com");
     expect(apiKeys.resolve(db, key.token)).toBeNull();
     expect(await new SqliteCredentialStore(db, masterKey).getAccount(user.id, added.id)).toBeNull();
     expect(db.prepare("SELECT COUNT(*) AS n FROM users").get()).toEqual({ n: 0 });

@@ -1,5 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { rateLimitFromEnv } from "../config/runtime.js";
+import { recordMetric, type MetricRecorder } from "../services/metrics.js";
 import type { ImapGateway } from "../mail/imap-gateway.js";
 import type { SmtpGateway } from "../mail/smtp-gateway.js";
 import type { SendRecorder } from "../services/send-log.js";
@@ -36,6 +38,7 @@ export interface OpenMailServerOptions {
   sends: SendRecorder;
   /** Shown in send-tool errors so the user can open the dashboard. */
   publicUrl?: string;
+  metrics?: MetricRecorder;
   /** Static SHA-256 hashes for single-user mode. Ignored when `authenticate` is set. */
   apiKeyHashes?: readonly Buffer[];
   /** User id paired with static hashes. Ignored when `authenticate` is set. */
@@ -58,7 +61,7 @@ export interface OpenMailServerOptions {
 }
 
 export function createOpenMailServer(options: OpenMailServerOptions): Server {
-  const limiter = new SlidingWindowRateLimit(options.rateLimit?.limit ?? 60, options.rateLimit?.windowMs ?? 60_000);
+  const limiter = new SlidingWindowRateLimit(options.rateLimit?.limit ?? rateLimitFromEnv(), options.rateLimit?.windowMs ?? 60_000);
   const failures = new SlidingWindowRateLimit(
     options.authFailureLimit?.limit ?? AUTH_FAILURE_LIMIT,
     options.authFailureLimit?.windowMs ?? 60_000,
@@ -77,6 +80,7 @@ export function createOpenMailServer(options: OpenMailServerOptions): Server {
       imap: options.imap,
       smtp: options.smtp,
       sends: options.sends,
+      ...(options.metrics ? { metrics: options.metrics } : {}),
       ...(options.publicUrl ? { publicUrl: options.publicUrl } : {}),
       ...(options.web ? { web: options.web } : {}),
       security: options.security ?? {},
@@ -117,6 +121,7 @@ interface HandlerDeps {
   smtp: SmtpGateway;
   sends: SendRecorder;
   publicUrl?: string;
+  metrics?: MetricRecorder;
   web?: WebRequestHandler;
   security: SecurityHeaderOptions;
   challenge: (invalidToken: boolean) => string;
@@ -195,6 +200,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: Handle
     return;
   }
   if (!options.limiter.allow(principal.keyId)) {
+    recordMetric(options.metrics, { kind: "mcp_rate_limited", name: "mcp", outcome: "429" });
     drain(req);
     writeJson(
       res,
@@ -233,6 +239,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: Handle
     imap: options.imap,
     smtp: options.smtp,
     sends: options.sends,
+    ...(options.metrics ? { metrics: options.metrics } : {}),
     userId: principal.userId,
     canSend: principal.canSend,
     via: principal.via,

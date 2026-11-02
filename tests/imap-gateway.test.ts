@@ -89,6 +89,37 @@ describe("imap gateway", () => {
     expect(options?.logger).toBe(false);
   });
 
+  it("hard-closes a stalled operation and handles late rejections while releasing the lock", async () => {
+    const client = fakeClient();
+    const gateway = createImapGateway(() => client, { resolve: publicDns, timeoutMs: 5, graceMs: 5 });
+    let rejectWork!: (err: Error) => void;
+    const work = gateway.withMailbox(account, "INBOX", async () => new Promise<void>((_resolve, reject) => { rejectWork = reject; }));
+    await expect(work).rejects.toMatchObject({ code: "timeout", category: "timeout" });
+    expect(client.calls.some((call) => call.method === "close")).toBe(true);
+    rejectWork(new Error("late failure"));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(client.lockReleased).toBe(true);
+  });
+
+  it("bounds DNS, connect and logout too, and never creates a socket after expired DNS", async () => {
+    let resolveDns!: (addresses: string[]) => void;
+    let created = false;
+    const gateway = createImapGateway(() => { created = true; return fakeClient(); }, {
+      resolve: () => new Promise((resolve) => { resolveDns = resolve; }), timeoutMs: 5, graceMs: 5,
+    });
+    await expect(gateway.withClient(account, async () => undefined)).rejects.toMatchObject({ code: "timeout" });
+    resolveDns(["93.184.216.34"]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(created).toBe(false);
+    for (const phase of ["connect", "logout"] as const) {
+      const client = fakeClient();
+      client[phase] = async () => new Promise<void>(() => {});
+      const slow = createImapGateway(() => client, { resolve: publicDns, timeoutMs: 5, graceMs: 5 });
+      await expect(slow.withClient(account, async () => undefined)).rejects.toMatchObject({ code: "timeout" });
+      expect(client.calls.some((call) => call.method === "close")).toBe(true);
+    }
+  });
+
   it("exposes imapflow's command runner used for THREAD", () => {
     const client = new ImapFlow({
       host: "127.0.0.1",

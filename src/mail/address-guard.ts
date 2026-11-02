@@ -1,6 +1,6 @@
 import { lookup } from "node:dns/promises";
 import { BlockList, isIP } from "node:net";
-import { MailError } from "../errors.js";
+import { MailError, failureCategory } from "../errors.js";
 import type { AccountCredentials } from "../store/types.js";
 import { isAllowlistedInsecureHost, isLoopbackHost } from "./tls.js";
 
@@ -113,8 +113,8 @@ export async function resolveHostTarget(
   let addresses: string[];
   try {
     addresses = await resolve(host);
-  } catch {
-    throw unresolved(input.protocol);
+  } catch (err) {
+    throw new MailError(input.protocol === "IMAP" ? "imap_error" : "smtp_error", `${input.protocol} host could not be resolved`, failureCategory(err));
   }
   if (addresses.length === 0) throw unresolved(input.protocol);
   if (addresses.some(isPrivateAddress)) throw blocked(input.protocol);
@@ -140,9 +140,9 @@ export async function resolveConnectTarget(
 
 function unresolved(protocol: "IMAP" | "SMTP"): MailError {
   const code = protocol === "IMAP" ? "imap_error" : "smtp_error";
-  return new MailError(code, `${protocol} host could not be resolved`);
+  return new MailError(code, `${protocol} host could not be resolved`, "host_not_found");
 }
 
 function blocked(protocol: "IMAP" | "SMTP"): MailError {
-  return new MailError("blocked_host", `${protocol} host must be a public internet address`);
+  return new MailError("blocked_host", `${protocol} host must be a public internet address`, "host_not_allowed");
 }

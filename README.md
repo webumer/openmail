@@ -39,7 +39,7 @@ Zoho EU and IN use `imap.zoho.eu` / `smtp.zoho.eu` and `imap.zoho.in` / `smtp.zo
 
 ### Read-only operations
 
-Results use `{ ok, data, truncated, warnings }`. Failures use `{ ok: false, error: { code, message }, warnings }`.
+Results use `{ ok, data, truncated, warnings }`. With no mailbox connected, all six tools succeed with an empty result, `setup_required: true`, and guidance to add a mailbox at `${OPENMAIL_PUBLIC_URL}/dashboard` (or “the OpenMail dashboard” when unset). `send_message` explicitly says nothing was sent. Unknown account ids still fail when you have mailboxes. Failures use `{ ok: false, error: { code, message }, warnings }`.
 
 - `list_accounts` — id, label, email, preset, IMAP host, and whether sending is enabled. Never passwords.
 - `send_message` — sends one plain-text email over SMTP after the assistant has shown it and the user confirmed. Every recipient is passed explicitly. Off unless sending is enabled for that mailbox and allowed for the connection.
@@ -63,7 +63,7 @@ npm run build
 npm start
 ```
 
-Open `http://127.0.0.1:8080/`, sign up, add a mailbox (presets auto-fill host/port; “Test connection” probes IMAP before save), create an API key, and copy the key once from the reveal page.
+Open `http://127.0.0.1:8080/`, sign up, add a mailbox (presets auto-fill host/port; “Test connection” checks IMAP and SMTP sign-in before save), create an API key, and copy the key once from the reveal page.
 
 | Variable | Purpose |
 | --- | --- |
@@ -72,6 +72,8 @@ Open `http://127.0.0.1:8080/`, sign up, add a mailbox (presets auto-fill host/po
 | `OPENMAIL_PUBLIC_URL` | Public origin for the dashboard MCP URL (e.g. `https://mcp.openmail.tools`). |
 | `OPENMAIL_MODE` | `multi` (default) or `single`. |
 | `OPENMAIL_INSECURE_COOKIES` | `1` to omit `Secure` on cookies for local HTTP (non-production only). |
+| `OPENMAIL_RATE_LIMIT_PER_MINUTE` | MCP calls per key in a sliding 60-second window: default 90, integer 1–10000. |
+| `OPENMAIL_IMAP_OP_TIMEOUT_MS` | IMAP work budget: default 25000 ms, integer 5000–120000. Search and thread reads return partial results when slow; stalled operations close after 5 s grace. |
 | `OPENMAIL_TRUST_PROXY` | `1` to trust `X-Forwarded-Proto` / `X-Forwarded-For`. |
 | `OPENMAIL_ALLOW_INSECURE_LOCALHOST` | `1` to allow plain IMAP to loopback (tests only). |
 | `OPENMAIL_INSECURE_IMAP_HOSTS` | Comma-separated exact hostnames allowed to use plain IMAP (operator-run internal servers only, e.g. `demo-mail`). |
@@ -151,18 +153,28 @@ npm start
 
 `npm run dev` reloads `src/index.ts` while you edit. Default listen address is `127.0.0.1:8080` (override with `[server]` in config when present).
 
-`GET /healthz` does not require a key. Every `/mcp` request must send `Authorization: Bearer <API key or OAuth access token>`. Unknown or revoked keys are `401`. Each accepted key is limited to 60 requests per minute (`429`). Request bodies over 1 MB are rejected (`413`).
+`GET /healthz` does not require a key. Every `/mcp` request must send `Authorization: Bearer <API key or OAuth access token>`. Unknown or revoked keys are `401`. Each accepted key is limited to 90 requests per minute (`429`). Request bodies over 1 MB are rejected (`413`).
 
 ## Operator CLI
 
 ```bash
 node dist/cli/admin.js list-users
+node dist/cli/admin.js metrics --days 14
+node dist/cli/admin.js metrics --kind tool_call --json
 printf '%s' "$LOGIN_PASSWORD" | node dist/cli/admin.js create-user --email you@example.com
 node dist/cli/admin.js add-account --user you@example.com --name work --email you@work.example --preset migadu --password-env MAILBOX_PW
 printf '%s' "$EXISTING_KEY" | node dist/cli/admin.js import-key --user you@example.com --name grok
 ```
 
 Secrets come from stdin or a named environment variable, never from arguments, and are never printed. See `docs/deploy.md` for running it inside Docker.
+
+## Password reset and aggregate metrics
+
+Use **Forgot password?** on `/login` to request a reset email. Configure the dedicated system SMTP sender with `OPENMAIL_SYSTEM_SMTP_HOST`, `OPENMAIL_SYSTEM_SMTP_PORT` (default 465), `OPENMAIL_SYSTEM_SMTP_SECURE` (default `1`; `0` requires STARTTLS), `OPENMAIL_SYSTEM_SMTP_USER`, `OPENMAIL_SYSTEM_SMTP_PASS`, and `OPENMAIL_SYSTEM_SMTP_FROM`. Set `OPENMAIL_PUBLIC_URL` to the public origin. See [Password reset email](docs/deploy.md#password-reset-email). No user's mailbox is used to send resets. Without this configuration the form points to support.
+
+Reset links expire in 30 minutes, work once, and carry the code in a URL fragment, which never reaches the server in a GET. Only SHA-256 token hashes are stored. Changing the password signs out all web sessions and keeps API keys and OAuth grants, like admin `set-password`.
+
+Multi-user mode counts daily mailbox tests/saves, tool outcomes and duration buckets, authentication outcomes, and MCP rate-limit rejections. These aggregate counters contain no personal data: no emails, hosts, usernames, IPs, user/account ids, secrets, folders, searches or content. They are retained for 400 UTC calendar days and pruned on startup. Single-user mode records no metrics. `admin metrics` prints sorted totals over the last 14 days by default, with optional `--days 1..400`, `--kind`, and `--json`.
 
 ## Public pages
 

@@ -63,6 +63,9 @@ function applyPreset() {
   const preset = byId("preset");
   const region = byId("zoho_region");
   const custom = preset.value === "custom";
+  for (const hint of document.querySelectorAll("[data-provider-hint]")) {
+    hint.hidden = hint.dataset.providerHint !== preset.value;
+  }
   region.disabled = preset.value !== "zoho";
   const security = document.getElementById("smtp_security");
   if (custom) {
@@ -99,4 +102,18 @@ if (preset && region) {
   preset.addEventListener("change", applyPreset);
   region.addEventListener("change", applyPreset);
   applyPreset();
+}
+
+// Fragments never reach the server. Move the reset code into the POST form, then clear it.
+const resetToken = document.getElementById("reset-token");
+if (resetToken) {
+  const fragment = new URLSearchParams(window.location.hash.slice(1));
+  const token = fragment.get("token");
+  if (window.location.hash) history.replaceState(null, "", window.location.pathname);
+  if (token && /^[A-Za-z0-9_-]{43}$/.test(token)) {
+    resetToken.value = token;
+    resetToken.type = "hidden";
+    document.getElementById("reset-code-label").hidden = true;
+    document.getElementById("reset-code-help").hidden = true;
+  }
 }

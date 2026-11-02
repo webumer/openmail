@@ -2,6 +2,7 @@ import type { SearchObject } from "imapflow";
 import type { MailAddress } from "./addresses.js";
 import type { BodyNode } from "./structure.js";
 import type { ThreadAlgorithm } from "./thread.js";
+import type { Deadline } from "./deadline.js";
 
 export interface FetchedMessage {
   uid: number;
@@ -55,6 +56,7 @@ export interface MailboxStatus {
  * THREAD extension; otherwise read tools search by header.
  */
 export interface ImapSession {
+  readonly deadline?: Deadline;
   readonly capabilities: ReadonlySet<string>;
   list(): Promise<ListedMailbox[]>;
   status(path: string): Promise<MailboxStatus | null>;

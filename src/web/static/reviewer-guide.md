@@ -45,7 +45,7 @@ Technical details: discovery via `/.well-known/oauth-protected-resource` (RFC 97
 ## 4. Negative checks (optional)
 - `/mcp` with no token returns **401** with `WWW-Authenticate: Bearer realm="openmail", resource_metadata="…", scope="mail.read mail.send"`; a wrong or expired token also returns 401.
 - Clicking **Deny** on the consent screen returns `access_denied` to the client and connects nothing.
-- More than 60 requests a minute on one key or connection returns **429**.
+- More than 90 requests a minute on one key or connection returns **429**.
 - Disconnecting the app or revoking the key → the connector stops working (401).
 - Asking it to delete, move, or flag mail: there is no tool for that. Asking it to send without you turning sending on, or without confirming the email, does not send.
 
@@ -65,3 +65,13 @@ Read tools: `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: tru
 
 ## What it does not do
 It does not delete, move, flag, or mark mail as read. It does not send from a mailbox where sending is off, or through a connection that was not allowed to send. Mail content is not stored. Email content is returned marked as untrusted third-party content.
+
+## Onboarding, slow servers and password reset
+
+Without a mailbox, all six tools return successful setup guidance with a dashboard link; sending says nothing was sent. Dashboard shows **Next step: add your mailbox**. OAuth consent reminds new users to add a mailbox after allowing access and still returns them to the assistant.
+
+Test connection and Save verify IMAP and SMTP sign-in without sending or enabling sending. Provider hints and safe failure categories explain what to try. Search and thread reads return partial results and a warning after a default 25 s work budget; stalled connections close after 5 s grace. Search includes a cursor when possible.
+
+Forgot password? on the login page uses the operator's optional dedicated email sender. Links work once for 30 minutes, use URL fragments, and are stored only as hashes. Without email configuration the form points to support. Reset signs out web sessions but keeps API keys and connected apps. Do not send real email during automated tests.
+
+OpenMail records only daily aggregate usage counters for mailbox tests/saves, tool outcomes/duration buckets, authentication/reset outcomes and MCP rate-limit rejections. No personal data is included: no emails, hosts, usernames, IPs, ids, secrets, folders, searches or content. Counters are retained for 400 UTC calendar days; single-user mode records none.

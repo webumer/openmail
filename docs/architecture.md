@@ -24,14 +24,14 @@ Multi-user is the hosted / shared path. Single-user remains for self-hosting one
 | Path | Role |
 | --- | --- |
 | `src/config` | Load `config.toml` (smol-toml) and validate with zod. Passwords are env-var names, never inline values. |
-| `src/db` | SQLite open + numbered migrations (`users`, `sessions`, `api_keys`, `mail_accounts`). |
+| `src/db` | SQLite open + numbered migrations (including daily `metric_counts` and hashed `password_resets`). |
 | `src/crypto` | Master key load, per-user data-key wrap, mailbox password seal/unseal, API key generation. |
 | `src/services` | Users, sessions' consumers, API keys, mail accounts (user-scoped). |
 | `src/store` | `CredentialStore`: `SqliteCredentialStore` (multi) and `ConfigCredentialStore` (single). |
 | `src/mail` | Presets, TLS policy, IMAP and SMTP gateways, read tools, and `send_message`. |
 | `src/tools` | MCP tool registration and zod input schemas. |
 | `src/server` | One HTTP server for `/healthz`, `/mcp`, and (multi) the setup UI. Bearer auth, body limit, per-key rate limit. |
-| `src/web` | Server-rendered landing, signup/login/dashboard, privacy, terms, reviewer guide, CSRF, session cookies, security headers, custom-host guard, static CSS/JS/logo. |
+| `src/web` | Server-rendered landing, signup/login/password reset/dashboard, privacy, terms, reviewer guide, CSRF, session cookies, security headers, custom-host guard, static CSS/JS/logo. |
 | `src/cli/admin.ts` | Operator CLI (`node dist/cli/admin.js`): list/create users, add a mailbox, import an existing API key. Secrets come from stdin or a named env var. |
 | `src/demo` | Fictional demo messages and an idempotent seeder that keeps the reviewer demo mailbox filled. |
 
@@ -41,7 +41,7 @@ Same process and port for everything:
 
 - `GET /healthz` — unauthenticated liveness
 - `POST /mcp` — streamable HTTP MCP (bearer required)
-- Setup UI (`/`, `/signup`, `/login`, `/dashboard`, accounts, keys, `/privacy`, `/terms`, `/reviewers`, `/logo.svg`, `/logo.png`, `/favicon.ico`, `/static/*`) — multi mode only
+- Setup UI (`/`, `/signup`, `/login`, `/forgot`, `/reset`, `/dashboard`, accounts, keys, `/privacy`, `/terms`, `/reviewers`, `/logo.svg`, `/logo.png`, `/favicon.ico`, `/static/*`) — multi mode only
 
 `OPENMAIL_PUBLIC_URL` is the public origin shown in the dashboard “Connect to Grok Bot” section (MCP URL becomes `{origin}/mcp`).
 

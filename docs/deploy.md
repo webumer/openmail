@@ -139,3 +139,34 @@ ssh your-server 'cd /opt/openmail && docker compose up -d --build'
 - Caddy also serves `openmail.tools` and `www.openmail.tools` as redirects. Each name gets its own certificate, so if their DNS is not pointed at the server yet, only those two fail (Caddy retries with backoff) and the main site keeps working.
 - Caddy redacts `Authorization` headers in its logs by default. OpenMail never logs keys, passwords or message bodies.
 - Back up the `openmail-data` volume and `.env` together. Without the master key the encrypted credential store cannot be read.
+
+## Password reset email
+
+Reset email is optional and uses a dedicated system SMTP account, never a user's connected mailbox. Configure these environment variables in the server environment (the production Compose service uses `env_file`). Keep real credentials out of source control and logs:
+
+| Variable | Meaning |
+|---|---|
+| `OPENMAIL_SYSTEM_SMTP_HOST` | System mail server |
+| `OPENMAIL_SYSTEM_SMTP_PORT` | Port, default 465 |
+| `OPENMAIL_SYSTEM_SMTP_SECURE` | Default `1` for implicit TLS; `0` requires STARTTLS (typically port 587) |
+| `OPENMAIL_SYSTEM_SMTP_USER` | Dedicated SMTP login |
+| `OPENMAIL_SYSTEM_SMTP_PASS` | Dedicated SMTP password |
+| `OPENMAIL_SYSTEM_SMTP_FROM` | Sender, e.g. `OpenMail <no-reply@openmail.tools>` |
+| `OPENMAIL_PUBLIC_URL` | Public origin used for reset links, e.g. `https://mcp.openmail.tools` |
+
+Host, user, password and from must all be configured. TLS verification is always enabled, with 15 s connection/greeting timeouts. Restart the service after configuring it. Without a system sender or public URL, `/forgot` explains that email reset is not switched on and points users to support; it creates no tokens.
+
+A requested email contains a `/reset#token=…` link and a separate code for users without JavaScript. Both expire after 30 minutes and work once. The fragment never reaches the server in a GET or Caddy logs; the script clears it and submits the code in the CSRF-protected POST body. Do not configure proxies to log request bodies. Only SHA-256 hashes are stored. New requests retire earlier unused codes; expired rows are pruned on startup and issuance. Reset changes the Argon2id password and deletes every web session transactionally, keeping API keys and OAuth grants, just like `admin set-password`.
+
+## Aggregate metrics and runtime budgets
+
+```bash
+docker compose exec -T openmail node dist/cli/admin.js metrics
+docker compose exec -T openmail node dist/cli/admin.js metrics --days 30 --kind tool_call --json
+```
+
+Default: the last 14 UTC calendar days, including today. `--days` accepts 1–400. `--kind` accepts `mailbox_test`, `mailbox_save`, `tool_call`, `auth`, or `mcp_rate_limited`. Output is sorted by kind, name, outcome and duration bucket, aggregated over the selected days. Mailbox counters include web tests/saves and admin adds; SMTP verification does not send email or enable sending.
+
+Migration 004 stores only daily counters, never per-event records or personal data. Dimensions are preset/tool/auth action names, safe outcomes and tool durations (`<1s`, `1-5s`, `5-15s`, `15-30s`, `>30s`). No emails, hosts, usernames, IPs, user/account ids, passwords, tokens, folders, searches or content are recorded. Metrics writes cannot fail requests. Retention is 400 UTC calendar days, pruned at startup. Single-user mode uses a no-op recorder.
+
+`OPENMAIL_RATE_LIMIT_PER_MINUTE` sets the per-key sliding 60-second budget (default 90, integer 1–10000). The failed-bearer limiter remains 30/min. `OPENMAIL_IMAP_OP_TIMEOUT_MS` sets the cooperative IMAP budget (default 25000, integer 5000–120000). Search and thread tools return available results, truncation warnings and a paging cursor when possible. After 5 s grace, the gateway closes stalled sockets and returns `timeout`. Existing result/size caps remain in place.

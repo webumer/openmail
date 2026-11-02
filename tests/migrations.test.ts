@@ -25,6 +25,8 @@ describe("migrations", () => {
       { version: 1, applied_at: expect.any(String) },
       { version: 2, applied_at: expect.any(String) },
       { version: 3, applied_at: expect.any(String) },
+      { version: 4, applied_at: expect.any(String) },
+      { version: 5, applied_at: expect.any(String) },
     ]);
 
     migrate(db);
@@ -34,10 +36,12 @@ describe("migrations", () => {
     expect(tableNames(db)).toEqual([
       "api_keys",
       "mail_accounts",
+      "metric_counts",
       "oauth_clients",
       "oauth_codes",
       "oauth_grants",
       "oauth_tokens",
+      "password_resets",
       "schema_migrations",
       "send_log",
       "sessions",

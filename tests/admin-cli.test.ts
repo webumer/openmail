@@ -29,19 +29,20 @@ function setup() {
       return Promise.reject(new Error("not used"));
     },
   };
+  const smtp = { verify: async () => undefined, send: async () => { throw new Error("must not send"); } };
   const lines: string[] = [];
   const io = (secret: string, env: Record<string, string | undefined> = {}) => ({
     readSecret: async () => secret,
     env,
     out: (line: string) => lines.push(line),
   });
-  return { db, masterKey, imap, probes, lines, io };
+  return { db, masterKey, imap, smtp, probes, lines, io };
 }
 
 describe("admin CLI", () => {
   it("creates a user, imports a legacy key, and adds a probed mailbox without printing secrets", async () => {
     const t = setup();
-    const deps = { db: t.db, masterKey: t.masterKey, imap: t.imap };
+    const deps = { db: t.db, masterKey: t.masterKey, imap: t.imap, smtp: t.smtp };
     await runAdmin(["create-user", "--email", "Owner@Example.com"], deps, t.io(LOGIN_SECRET));
     expect(await users.verifyPassword(t.db, { email: "owner@example.com", password: LOGIN_SECRET })).not.toBeNull();
 
@@ -82,7 +83,7 @@ describe("admin CLI", () => {
 
   it("does not let another user reach an account by name", async () => {
     const t = setup();
-    const deps = { db: t.db, masterKey: t.masterKey, imap: t.imap };
+    const deps = { db: t.db, masterKey: t.masterKey, imap: t.imap, smtp: t.smtp };
     await runAdmin(["create-user", "--email", "a@example.com"], deps, t.io(LOGIN_SECRET));
     await runAdmin(["create-user", "--email", "b@example.com"], deps, t.io(LOGIN_SECRET));
     await runAdmin(
@@ -97,7 +98,7 @@ describe("admin CLI", () => {
 
   it("adds a custom plain-IMAP host only when it is on the operator allowlist", async () => {
     const t = setup();
-    const deps = { db: t.db, masterKey: t.masterKey, imap: t.imap };
+    const deps = { db: t.db, masterKey: t.masterKey, imap: t.imap, smtp: t.smtp };
     await runAdmin(["create-user", "--email", "reviewer@example.com"], deps, t.io(LOGIN_SECRET));
     const args = ["add-account", "--user", "reviewer@example.com", "--name", "Demo mailbox", "--email", "demo@demo.example", "--preset", "custom", "--imap-host", "demo-mail", "--imap-port", "3143", "--plain", "--username", "demo"];
     await expect(runAdmin(args, deps, t.io(MAILBOX_SECRET, {}))).rejects.toThrow(/OPENMAIL_INSECURE_IMAP_HOSTS/);
@@ -111,7 +112,7 @@ describe("admin CLI", () => {
 
   it("sets a new login password, signs out sessions, keeps API keys, never prints it", async () => {
     const t = setup();
-    const deps = { db: t.db, masterKey: t.masterKey, imap: t.imap };
+    const deps = { db: t.db, masterKey: t.masterKey, imap: t.imap, smtp: t.smtp };
     const NEW_SECRET = "a-brand-new-login-pass-123";
     await runAdmin(["create-user", "--email", "owner@example.com"], deps, t.io(LOGIN_SECRET));
     await runAdmin(["import-key", "--user", "owner@example.com", "--name", "grok"], deps, t.io(LEGACY_KEY));

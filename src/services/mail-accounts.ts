@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { sealPassword, sealSmtpPassword, unwrapDataKey } from "../crypto/envelope.js";
 import { isUniqueConstraint } from "../db/constraint.js";
-import { MailError } from "../errors.js";
+import { MailError, failureCategory, toMailError, toSmtpError } from "../errors.js";
+import type { ImapGateway } from "../mail/imap-gateway.js";
+import type { SmtpGateway } from "../mail/smtp-gateway.js";
+import type { AccountCredentials } from "../store/types.js";
 import { resolveEndpoints, type ProviderPreset } from "../mail/presets.js";
 import {
   parseEmail,
@@ -15,6 +18,26 @@ import {
 
 /** Keeps one account from storing unbounded rows or fanning out unbounded IMAP logins. */
 export const MAX_MAIL_ACCOUNTS_PER_USER = 25;
+
+export class MailboxConnectionError extends MailError {
+  constructor(readonly part: "IMAP" | "SMTP", error: MailError) {
+    super(error.code, error.message, failureCategory(error));
+  }
+}
+
+/** Test sign-in only; verifying SMTP never sends mail or enables sending. */
+export async function testConnection(account: AccountCredentials, imap: ImapGateway, smtp: SmtpGateway): Promise<void> {
+  try {
+    await imap.withClient(account, async () => undefined);
+  } catch (err) {
+    throw new MailboxConnectionError("IMAP", toMailError(err, account.password));
+  }
+  try {
+    await smtp.verify(account);
+  } catch (err) {
+    throw new MailboxConnectionError("SMTP", toSmtpError(err, [account.password, account.smtpAuth.pass]));
+  }
+}
 
 export interface NewMailAccount {
   userId: string;
