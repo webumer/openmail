@@ -11,8 +11,9 @@ export function failureCategory(err: unknown): FailureCategory {
   const errno = code || /\b(ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ESOCKETTIMEDOUT|ECONNREFUSED|ECONNRESET|ENETUNREACH|EHOSTUNREACH)\b/.exec(errorText(err))?.[1] || "";
   if (["BLOCKED_HOST", "INSECURE_TRANSPORT", "HOST_NOT_ALLOWED"].includes(code)) return "host_not_allowed";
   if (["ENOTFOUND", "EAI_AGAIN"].includes(errno)) return "host_not_found";
-  if (["ETIMEDOUT", "ESOCKETTIMEDOUT"].includes(errno)) return "timeout";
-  if (["ECONNREFUSED", "ECONNRESET", "ECONNECTION", "ENETUNREACH", "EHOSTUNREACH"].includes(errno)) return "connection_refused";
+  // imapflow uses CONNECT_TIMEOUT / GREETING_TIMEOUT / UPGRADE_TIMEOUT / ETIMEOUT and NoConnection.
+  if (["ETIMEDOUT", "ESOCKETTIMEDOUT", "ETIMEOUT", "CONNECT_TIMEOUT", "GREETING_TIMEOUT", "UPGRADE_TIMEOUT"].includes(errno)) return "timeout";
+  if (["ECONNREFUSED", "ECONNRESET", "ECONNECTION", "ENETUNREACH", "EHOSTUNREACH", "NOCONNECTION"].includes(errno)) return "connection_refused";
   if (code === "ETLS" || /CERT_|CERTIFICATE|UNABLE_TO_VERIFY|SELF_SIGNED|ERR_TLS|ERR_SSL/.test(code)) return "tls";
   if (responseCode === "LOGINDISABLED") return "imap_disabled";
   const text = [raw.responseText, raw.response].filter((value) => typeof value === "string").join(" ");

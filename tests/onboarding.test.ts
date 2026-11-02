@@ -182,7 +182,7 @@ describe("onboarding and MCP metrics", () => {
           expect(call.state.body).not.toContain(account.password);
         }
       }
-      expect(metrics.map((m) => m.outcome)).toEqual(["imap:auth_failed", "smtp:timeout", "ok", "imap:auth_failed", "smtp:timeout", "ok"]);
+      expect(metrics.map((m) => m.outcome)).toEqual(["imap:auth_failed", "smtp:timeout", "ok", "imap:auth_failed", "ok", "smtp:timeout", "ok"]);
       expect(db.prepare("SELECT send_enabled FROM mail_accounts").get()).toEqual({ send_enabled: 0 });
     } finally { db.close(); }
   });

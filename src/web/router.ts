@@ -391,14 +391,18 @@ async function submitAccount(
     return;
   }
   const metricKind = probeOnly ? "mailbox_test" : "mailbox_save";
-  const failure = (await hostProblem(handler, parsed.account, "IMAP")) ?? (await connectionProbe(handler, parsed.account, "IMAP"));
+  // Address/port guard failures always block (both IMAP and SMTP), as before v0.5.
+  // Only an SMTP sign-in/connection failure is downgraded to a warning on save.
+  const failure = (await hostProblem(handler, parsed.account, "IMAP"))
+    ?? (await hostProblem(handler, parsed.account, "SMTP"))
+    ?? (await connectionProbe(handler, parsed.account, "IMAP"));
   if (failure) {
     recordMetric(handler.metrics, { kind: metricKind, name: parsed.account.preset, outcome: `${failure.part.toLowerCase()}:${failureCategory(failure.error)}` });
     writeDashboard(res, handler, session, { draft: parsed.draft, errors: [failure.message], notice }, 400);
     return;
   }
   const smtpFailure = checkSmtp
-    ? (await hostProblem(handler, parsed.account, "SMTP")) ?? (await connectionProbe(handler, parsed.account, "SMTP"))
+    ? await connectionProbe(handler, parsed.account, "SMTP")
     : null;
   if (probeOnly) {
     recordMetric(handler.metrics, { kind: metricKind, name: parsed.account.preset,
@@ -415,8 +419,11 @@ async function submitAccount(
   }
   try {
     mailAccounts.add(handler.db, handler.masterKey, accountInput(session.userId, parsed.account));
-    recordMetric(handler.metrics, { kind: metricKind, name: parsed.account.preset,
-      outcome: smtpFailure ? `smtp:${failureCategory(smtpFailure.error)}` : "ok" });
+    // The save succeeded; an SMTP warning is counted separately as a test outcome.
+    recordMetric(handler.metrics, { kind: metricKind, name: parsed.account.preset, outcome: "ok" });
+    if (smtpFailure) {
+      recordMetric(handler.metrics, { kind: "mailbox_test", name: parsed.account.preset, outcome: `smtp:${failureCategory(smtpFailure.error)}` });
+    }
   } catch (err) {
     const message = safeMailMessage(err, parsed.account.password);
     if (!message) throw err;
@@ -686,6 +693,23 @@ async function submitSending(req: IncomingMessage, res: ServerResponse, handler:
   if (!handler.probeAttempts.allow(`probe:${session.userId}`)) {
     limited(res);
     return;
+  }
+  if (account.preset === "custom") {
+    // Re-check the stored SMTP address and port before turning sending on.
+    const problem = await checkCustomHostFailure({
+      host: account.smtp.host,
+      port: account.smtp.port,
+      kind: "SMTP",
+      allowInsecureLocalhost: handler.allowInsecureLocalhost,
+    });
+    if (problem) {
+      recordMetric(handler.metrics, { kind: "mailbox_test", name: account.preset, outcome: `smtp:${failureCategory(problem)}` });
+      writeDashboard(res, handler, session, {
+        draft: emptyAccountDraft(),
+        errors: [`${problem.message}. ${setupFailureMessage("SMTP", problem, account.preset)}`],
+      }, 400);
+      return;
+    }
   }
   try {
     await handler.smtp.verify(account);

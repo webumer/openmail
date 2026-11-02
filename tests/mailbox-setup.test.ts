@@ -77,7 +77,10 @@ describe("mailbox setup requirements", () => {
     expect(saved.body).not.toContain("fake-smtp-password");
     expect(t.verify).toHaveBeenCalledOnce();
     expect(mailAccounts.list(db, userId)).toMatchObject([{ name: "work", sendEnabled: false }]);
-    expect(t.metrics).toEqual([{ kind: "mailbox_save", name: "gmail", outcome: "smtp:timeout" }]);
+    expect(t.metrics).toEqual([
+      { kind: "mailbox_save", name: "gmail", outcome: "ok" },
+      { kind: "mailbox_test", name: "gmail", outcome: "smtp:timeout" },
+    ]);
   });
 
   it("reports IMAP reading success separately from an SMTP failure on Test connection and checks again on enable-sending", async () => {
@@ -124,17 +127,28 @@ describe("mailbox setup requirements", () => {
     expect(t.verify).not.toHaveBeenCalled();
   });
 
-  it("saves IMAP with an SMTP warning when the SMTP address guard refuses the host", async () => {
+  it.each(["/accounts", "/accounts/test"])("blocks %s when the SMTP address guard refuses the host or port", async (path) => {
     const t = harness();
-    const saved = await t.submit("/accounts", { ...customFields, smtp_host: "private.example.com" });
-    expect(saved.status).toBe(200);
-    expect(saved.body).toContain("Mailbox saved. IMAP: Reading works.");
-    expect(saved.body).toContain("SMTP:");
-    expect(saved.body).toContain("Use a public mail server address");
-    expect(t.withClient).toHaveBeenCalledOnce();
+    for (const fields of [{ smtp_host: "private.example.com" }, { smtp_port: "25" }]) {
+      const refused = await t.submit(path, { ...customFields, ...fields });
+      expect(refused.status).toBe(400);
+    }
+    expect(t.withClient).not.toHaveBeenCalled();
     expect(t.verify).not.toHaveBeenCalled();
-    expect(mailAccounts.list(db, userId)).toHaveLength(1);
-    expect(t.metrics.map((m) => m.outcome)).toEqual(["smtp:host_not_allowed"]);
+    expect(mailAccounts.list(db, userId)).toHaveLength(0);
+    expect(t.metrics.map((m) => m.outcome)).toEqual(["smtp:host_not_allowed", "smtp:host_not_allowed"]);
+  });
+
+  it("re-checks the stored custom SMTP address before enabling sending", async () => {
+    const t = harness();
+    await t.submit("/accounts", customFields);
+    const mailbox = mailAccounts.list(db, userId)[0]!;
+    db.prepare("UPDATE mail_accounts SET smtp_port = 25 WHERE id = ?").run(mailbox.id);
+    const enabled = await t.submit(`/accounts/${mailbox.id}/sending`, { enabled: "1" });
+    expect(enabled.status).toBe(400);
+    expect(enabled.body).toContain("SMTP port must be one of");
+    expect(mailAccounts.list(db, userId)[0]?.sendEnabled).toBe(false);
+    expect(t.metrics.at(-1)?.outcome).toBe("smtp:host_not_allowed");
   });
 
   it.each(["conflict", "limit", "database"])("does not misreport a Save %s failure as IMAP", async (failure) => {

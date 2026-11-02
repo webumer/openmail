@@ -33,6 +33,11 @@ describe("safe connection failures", () => {
     [new Error("Command failed"), "unknown"],
     [{ responseText: "Command failed" }, "unknown"],
     [new Error("TLS ssl0.ovh.net authentication failed timeout"), "unknown"],
+    [{ code: "CONNECT_TIMEOUT" }, "timeout"],
+    [{ code: "GREETING_TIMEOUT" }, "timeout"],
+    [{ code: "ETIMEOUT" }, "timeout"],
+    [{ code: "UPGRADE_TIMEOUT" }, "timeout"],
+    [{ code: "NoConnection" }, "connection_refused"],
     [new Error("something happened"), "unknown"],
   ])("classifies raw fields: %o", (raw, category) => {
     expect(failureCategory(raw)).toBe(category);
