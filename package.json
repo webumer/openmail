@@ -1,6 +1,6 @@
 {
   "name": "openmail",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Hosted, provider-agnostic IMAP/SMTP MCP server for AI agents",
   "type": "module",
   "license": "MIT",
@@ -18,7 +18,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@node-rs/argon2": "^2.2.2",
     "better-sqlite3": "^13.0.3",
     "html-to-text": "^10.0.1",

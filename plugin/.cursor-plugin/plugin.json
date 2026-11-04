@@ -1,6 +1,6 @@
 {
   "name": "openmail",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Read and search any IMAP mailbox from your agent, and send only when you turn sending on for that mailbox. Reading never marks mail as read. Mail content is not stored.",
   "author": {
     "name": "Umer Sulman",

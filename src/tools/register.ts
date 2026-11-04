@@ -1,5 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { toCallToolResult } from "./result.js";
+import { installCallGuard } from "./guard.js";
 import { setupRequired } from "../mail/setup.js";
 import { durationBucket, recordMetric, toolOutcome, type MetricRecorder } from "../services/metrics.js";
 import { fail } from "../mail/result.js";
@@ -31,13 +33,7 @@ import {
 
 export const DEFAULT_USER_ID = "default";
 
-export function toCallToolResult(result: ToolResult<unknown>): CallToolResult {
-  const payload = {
-    content: [{ type: "text" as const, text: JSON.stringify(result) }],
-    structuredContent: result as unknown as Record<string, unknown>,
-  };
-  return result.ok ? { ...payload, isError: false } : { ...payload, isError: true };
-}
+export { toCallToolResult } from "./result.js";
 
 export interface MailServerDeps extends MailDeps, Omit<SendDeps, "store" | "imap"> {
   userId: string;
@@ -52,6 +48,7 @@ export function createMailMcpServer(deps: MailServerDeps): McpServer {
     },
   );
   registerMailTools(server, deps);
+  installCallGuard(server, deps);
   return server;
 }
 
