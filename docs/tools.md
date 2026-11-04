@@ -2,7 +2,7 @@
 
 Reference for assistants, marketplace reviewers and self-hosters: setup, permissions, every tool's inputs and outputs, read/write classification, side effects, errors and limits.
 
-Endpoint: https://mcp.openmail.tools/mcp (MCP streamable HTTP). Server name `openmail`, version 0.5.0.
+Endpoint: https://mcp.openmail.tools/mcp (MCP streamable HTTP). Server name `openmail`, version 0.5.1.
 
 ## Setup
 1. Create an OpenMail account at https://openmail.tools and add a mailbox (provider preset or custom IMAP host, port 993 TLS, username and app password). OpenMail tests the login before saving.
@@ -52,6 +52,10 @@ Tool results are JSON: `{"ok": true, "data": ..., "truncated": bool, "warnings":
 | `config_error` | The mailbox settings are unusable (e.g. host not a public address) |
 | `limit_reached` | Per-user cap (25 mailboxes / 25 keys); dashboard only |
 When the authenticated user has **zero mailboxes**, every tool returns `isError: false` and a successful result with `setup_required: true`, a plain-text `message`, and `dashboard_url` when a public URL is configured. Add a mailbox using **Add mailbox** at that dashboard, then retry. Empty data is `[]` for list tools, `{messages: [], next_cursor: null}` for search, `null` for reads, and `{sent: false}` for send; the send message explicitly states **nothing was sent**. With mailboxes present, an unknown account id still returns `not_found`.
+
+The zero-mailbox check runs before argument validation, so a call with missing or invalid arguments (for example `list_folders` without `account`) still gets the setup message rather than a schema error.
+
+**Unknown tool names.** Calling a tool that does not exist returns `isError: true` with `error.code: "unknown_tool"`, a message naming the six available tools, and `available_tools`. When the user has no mailbox, the result also carries `setup_required: true`, the add-mailbox message and `dashboard_url`. Host-prefixed names such as `openmail.list_folders`, `openmail_list_folders` or `mcp__openmail__list_folders` are accepted as aliases on `tools/call`; `tools/list` is unchanged. With a mailbox present, schema validation errors keep the SDK message and add a hint to call `list_accounts` first.
 
 HTTP level: `401` + `WWW-Authenticate` for a missing, expired or revoked token; `429` with `Retry-After: 60` when rate limited; `413` for a body over 1 MB.
 

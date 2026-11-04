@@ -2,7 +2,7 @@ import type Database from "better-sqlite3";
 import { PROVIDER_PRESETS } from "../mail/presets.js";
 import { FAILURE_CATEGORIES } from "../errors.js";
 
-export const METRIC_KINDS = ["mailbox_test", "mailbox_save", "tool_call", "auth", "mcp_rate_limited"] as const;
+export const METRIC_KINDS = ["mailbox_test", "mailbox_save", "tool_call", "auth", "mcp_rate_limited", "unknown_tool"] as const;
 export type MetricKind = (typeof METRIC_KINDS)[number];
 export const TOOL_NAMES = ["list_accounts", "list_folders", "search_messages", "read_message", "read_thread", "send_message"] as const;
 const TOOL_OUTCOMES = ["ok", "setup_required", "imap_error", "smtp_error", "timeout", "not_found", "rate_limited",
@@ -50,6 +50,7 @@ function valid(metric: Metric): boolean {
   if (bucket !== "") return false;
   if (kind === "auth") return ["login", "signup", "reset_request", "reset_complete"].includes(name) && ["ok", "failed", "rate_limited"].includes(outcome);
   if (kind === "mcp_rate_limited") return name === "mcp" && outcome === "429";
+  if (kind === "unknown_tool") return name === "mcp" && outcome === "not_found";
   if (kind !== "mailbox_test" && kind !== "mailbox_save") return false;
   return (PROVIDER_PRESETS as readonly string[]).includes(name) && (outcome === "ok" ||
     ["imap", "smtp"].some((part) => FAILURE_CATEGORIES.some((category) => outcome === `${part}:${category}`)));
