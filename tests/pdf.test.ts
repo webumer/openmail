@@ -1,24 +1,78 @@
-import { describe, expect, it } from "vitest";
+import { ChildProcess, fork, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AttachmentLimits } from "../src/config/runtime.js";
 import { MailError } from "../src/errors.js";
 import { getAttachment } from "../src/mail/get-attachment.js";
 import type { ImapGateway } from "../src/mail/imap-gateway.js";
-import { createPdfPool, runPdfChild, type PdfRunner } from "../src/mail/pdf.js";
+import { createPdfPool, killPdfChildren, pdfChildEntry, runPdfChild, startPdfChild, type PdfRunner } from "../src/mail/pdf.js";
 import type { CredentialStore } from "../src/store/types.js";
 import { RecordingSession, account, fetched } from "./fixtures.js";
 import { flateBomb, simplePdf, textStream } from "./helpers/pdf.js";
 
+// With `swallowJob.on`, children forked by pdf.ts never get their job and idle until killed.
+const swallowJob = vi.hoisted(() => ({ on: false }));
+vi.mock("node:child_process", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...original,
+    fork: (...args: Parameters<typeof original.fork>) => {
+      const child = original.fork(...args);
+      if (swallowJob.on) {
+        child.send = ((_message: unknown, callback?: (err: Error | null) => void) => {
+          callback?.(null);
+          return true;
+        }) as typeof child.send;
+      }
+      return child;
+    },
+  };
+});
+
 const PDF = new Uint8Array(simplePdf(["hello"]));
 const JOB = { maxPages: 5, maxChars: 1_000, timeoutMs: 5_000 };
 
-/** A runner whose calls stay pending until the test settles them. */
-function controlledRunner() {
-  const calls: { timeoutMs: number; signal: AbortSignal; resolve: () => void }[] = [];
-  const run: PdfRunner = (_bytes, job, signal) => new Promise((resolve, reject) => {
-    signal.addEventListener("abort", () => reject(new MailError("cancelled", "cancelled")), { once: true });
-    calls.push({ timeoutMs: job.timeoutMs, signal, resolve: () => resolve({ pages: 1, pagesRead: 1, text: "ok", chars: 2 }) });
-  });
+/**
+ * A runner whose calls stay pending until the test settles them. By default the
+ * fake process exits when the call settles; with `holdExit` it exits only on `exit()`.
+ */
+function controlledRunner(holdExit = false) {
+  const calls: { timeoutMs: number; signal: AbortSignal; resolve: () => void; exit: () => void }[] = [];
+  const run: PdfRunner = (_bytes, job, signal) => {
+    let exit!: () => void;
+    const exited = new Promise<void>((resolve) => (exit = resolve));
+    const result = new Promise<{ pages: number; pagesRead: number; text: string; chars: number }>((resolve, reject) => {
+      signal.addEventListener("abort", () => reject(new MailError("cancelled", "cancelled")), { once: true });
+      calls.push({ timeoutMs: job.timeoutMs, signal, resolve: () => resolve({ pages: 1, pagesRead: 1, text: "ok", chars: 2 }), exit });
+    });
+    if (!holdExit) void result.then(exit, exit);
+    return { result, exited };
+  };
   return { run, calls };
+}
+
+/** True while a process with this pid exists (zombies included). */
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function exitOf(child: ChildProcess): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  return new Promise((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
+}
+
+async function waitUntil(check: () => boolean, ms: number): Promise<boolean> {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (check()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return check();
 }
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -112,6 +166,30 @@ describe("PDF pool", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("holds a running slot until the process has exited, not just until the call settles", async () => {
+    const { run, calls } = controlledRunner(true);
+    const pool = createPdfPool({ maxRunning: 1, run });
+    const first = new AbortController();
+    const a = pool.admit(1).extract(PDF, JOB, first.signal);
+    const b = pool.admit(1).extract(PDF, JOB);
+    await tick();
+    first.abort();
+    await expect(a).rejects.toMatchObject({ code: "cancelled" });
+    await tick();
+    // The first process was killed but has not exited: the second still waits.
+    expect(pool.stats).toMatchObject({ running: 1, waiting: 1 });
+    expect(calls).toHaveLength(1);
+    calls[0]!.exit();
+    await tick();
+    expect(calls).toHaveLength(2);
+    calls[1]!.resolve();
+    await expect(b).resolves.toMatchObject({ text: "ok" });
+    expect(pool.stats.running).toBe(1);
+    calls[1]!.exit();
+    await tick();
+    expect(pool.stats.running).toBe(0);
+  });
+
   it("get_attachment takes its place before downloading and reports rate_limited without fetching when the pool is full", async () => {
     const pool = createPdfPool({ maxAdmitted: 1 });
     const held = pool.admit(1);
@@ -135,12 +213,91 @@ describe("PDF pool", () => {
     held.release();
     const done = await getAttachment(deps, "user-1", "work", "INBOX", 7, { index: 0 });
     expect(done).toMatchObject({ ok: true, data: { kind: "pdf", text: "hello" } });
+    expect(await waitUntil(() => pool.stats.running === 0, 2_000)).toBe(true);
     expect(pool.stats).toEqual({ admitted: 0, admittedBytes: 0, running: 0, waiting: 0 });
   });
 });
 
 describe("PDF child process", () => {
   const signal = () => new AbortController().signal;
+  afterEach(() => {
+    swallowJob.on = false;
+    vi.restoreAllMocks();
+    killPdfChildren();
+  });
+
+  it("frees the slot only after a killed child has exited, and the process is gone by then", async () => {
+    const run = startPdfChild(simplePdf(["a"]), { maxPages: 5, maxChars: 100, timeoutMs: 1 }, signal());
+    let exited = false;
+    void run.exited.then(() => (exited = true));
+    await expect(run.result).rejects.toMatchObject({ code: "parse_error" });
+    await run.exited;
+    expect(exited).toBe(true);
+    expect(alive(run.pid!)).toBe(false);
+  });
+
+  it("keeps sending SIGKILL when a kill fails, and holds the slot until the child exits", async () => {
+    const real = ChildProcess.prototype.kill;
+    let attempts = 0;
+    vi.spyOn(ChildProcess.prototype, "kill").mockImplementation(function (this: ChildProcess, sig?: NodeJS.Signals | number) {
+      attempts += 1;
+      return attempts <= 2 ? false : real.call(this, sig);
+    });
+    swallowJob.on = true;
+    const pool = createPdfPool({ maxRunning: 1, run: (bytes, job, s) => startPdfChild(bytes, job, s) });
+    const cancel = new AbortController();
+    const extraction = pool.admit(1).extract(PDF, JOB, cancel.signal);
+    await tick();
+    cancel.abort();
+    await expect(extraction).rejects.toMatchObject({ code: "cancelled" });
+    expect(pool.stats.running).toBe(1);
+    const cancelled = Date.now();
+    expect(await waitUntil(() => pool.stats.running === 0, 5_000)).toBe(true);
+    // Two failed attempts, then the retry a second later succeeds.
+    expect(attempts).toBe(3);
+    expect(Date.now() - cancelled).toBeGreaterThanOrEqual(1_500);
+  });
+
+  it("kills every running child on killPdfChildren", async () => {
+    const run = startPdfChild(simplePdf(["a"]), { maxPages: 5, maxChars: 100, timeoutMs: 30_000 }, signal());
+    killPdfChildren();
+    await expect(run.result).rejects.toMatchObject({ code: "parse_error" });
+    await run.exited;
+    expect(alive(run.pid!)).toBe(false);
+  });
+
+  it("kills itself at its own deadline even when the server never sends a job or kills it", async () => {
+    const entry = pdfChildEntry();
+    const child = fork(entry.path, ["300"], { execArgv: entry.execArgv, env: {}, stdio: ["ignore", "ignore", "ignore", "ipc"] });
+    const started = Date.now();
+    expect((await exitOf(child)).signal).toBe("SIGKILL");
+    expect(Date.now() - started).toBeGreaterThanOrEqual(250);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it("exits when the IPC channel to the server closes", async () => {
+    const entry = pdfChildEntry();
+    const child = fork(entry.path, ["60000"], { execArgv: entry.execArgv, env: {}, stdio: ["ignore", "ignore", "ignore", "ipc"] });
+    await new Promise((resolve) => child.once("spawn", resolve));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    child.disconnect();
+    expect((await exitOf(child)).code).toBe(1);
+  });
+
+  it.each([
+    ["SIGTERM", 143],
+    ["SIGINT", 130],
+  ])("kills running children when the server gets %s, and exits %i", async (name, status) => {
+    const fixture = fileURLToPath(new URL("./helpers/pdf-parent.ts", import.meta.url));
+    const tsx = fileURLToPath(new URL("../node_modules/tsx/dist/esm/index.mjs", import.meta.url));
+    const parent = spawn(process.execPath, ["--import", tsx, fixture, name], { stdio: ["ignore", "pipe", "inherit"] });
+    let out = "";
+    parent.stdout.on("data", (chunk: Buffer) => (out += chunk.toString()));
+    expect((await exitOf(parent)).code).toBe(status);
+    const pid = Number(/child (\d+)/.exec(out)?.[1]);
+    expect(pid).toBeGreaterThan(0);
+    expect(await waitUntil(() => !alive(pid), 2_000)).toBe(true);
+  });
 
   it("sends back at most maxChars even when one page holds far more, and counts the rest", async () => {
     const lines = Array.from({ length: 400 }, (_, i) => `row ${i} ${"y".repeat(40)}`);
@@ -165,4 +322,12 @@ describe("PDF child process", () => {
       .rejects.toMatchObject({ code: "parse_error", message: expect.stringContaining("too much memory") });
     expect(process.memoryUsage().rss - before).toBeLessThan(100 * 1024 * 1024);
   }, 40_000);
+
+  // prlimit ships with util-linux (in the Docker image); macOS has no RLIMIT_DATA tool.
+  it.runIf(process.platform === "linux" && existsSync("/usr/bin/prlimit"))("stops a decompression bomb at the kernel data limit even with the watchdog off", async () => {
+    const bomb = simplePdf(["unused"], { 0: await flateBomb(1024 * 1024 * 1024) });
+    const run = startPdfChild(bomb, { maxPages: 1, maxChars: 100, timeoutMs: 30_000 }, signal(), { rssLimitBytes: Number.MAX_SAFE_INTEGER, dataLimitBytes: 256 * 1024 * 1024 });
+    // Depending on where allocation fails, V8 aborts or pdf.js reports the error; either way the server gets parse_error.
+    await expect(run.result).rejects.toMatchObject({ code: "parse_error" });
+  }, 60_000);
 });

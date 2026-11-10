@@ -36,6 +36,7 @@ import {
 } from "./store/index.js";
 import { createWebHandler, resolveSecureCookies } from "./web/index.js";
 import { createSmtpGateway } from "./mail/smtp-gateway.js";
+import { installPdfShutdownHooks } from "./mail/pdf.js";
 import { parseInsecureImapHosts, parseInsecureSmtpHosts } from "./mail/tls.js";
 import { createMemorySendRecorder, createSqliteSendRecorder, interruptStaleSends, pruneSendLog } from "./services/send-log.js";
 import { demoConfigFromEnv, reseedIntervalFromEnv, startDemoSeeder } from "./demo/seed.js";
@@ -67,6 +68,8 @@ export { createWebHandler, resolveSecureCookies };
 
 const invoked = process.argv[1];
 if (invoked && import.meta.url === pathToFileURL(invoked).href) {
+  // PDF parser processes are killed when the server exits or gets SIGTERM/SIGINT.
+  installPdfShutdownHooks();
   start().catch((err: unknown) => {
     console.error(operatorErrorText(err, "OpenMail failed to start"));
     process.exit(1);

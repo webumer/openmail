@@ -46,6 +46,11 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # Kernel memory bound for the server and its PDF parser processes (~200 MB
+    # normally). No swap. Parser processes set oom_score_adj=1000, so when the
+    # cgroup hits the limit the kernel kills a parser, not the server.
+    mem_limit: 1536m
+    memswap_limit: 1536m
 
   # Reviewer demo mailbox. Plain IMAP on an internal network with no
   # published ports and no internet access; only OpenMail can reach it.

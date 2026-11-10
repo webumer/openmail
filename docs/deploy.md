@@ -75,6 +75,13 @@ docker compose logs caddy  # look for "certificate obtained successfully"
 Both services use `restart: unless-stopped`, so they come back after a reboot
 (Docker itself is enabled at boot by `systemctl enable docker`).
 
+The `openmail` container is limited to 1536 MB of memory with no swap
+(`mem_limit`/`memswap_limit`). The server normally uses about 200 MB; the rest
+is headroom for the two PDF parser processes `get_attachment` may run. If the
+limit is reached, the kernel kills a parser process (they mark themselves as
+the first OOM victim), not the server. Lower it on a small host, but keep
+roughly 1 GB above the server's own use.
+
 ## 5. Check it
 
 ```bash

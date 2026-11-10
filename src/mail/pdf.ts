@@ -1,6 +1,7 @@
 import { execFile, fork, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { constants as osConstants } from "node:os";
 import { fileURLToPath } from "node:url";
 import { MailError } from "../errors.js";
 
@@ -23,8 +24,19 @@ export interface PdfOptions {
   maxChars: number;
 }
 
-/** Runs one extraction. The default starts a child process; tests inject fakes. */
-export type PdfRunner = (bytes: Uint8Array, job: { maxPages: number; maxChars: number; timeoutMs: number }, signal: AbortSignal) => Promise<PdfText>;
+/**
+ * One extraction. `result` settles with the outcome; `exited` resolves (never
+ * rejects) once the process is gone. The pool holds the running slot until
+ * `exited`, so a killed child that has not exited yet still counts.
+ */
+export interface PdfRun {
+  result: Promise<PdfText>;
+  exited: Promise<void>;
+  pid?: number;
+}
+
+/** Starts one extraction. The default starts a child process; tests inject fakes. */
+export type PdfRunner = (bytes: Uint8Array, job: { maxPages: number; maxChars: number; timeoutMs: number }, signal: AbortSignal) => PdfRun;
 
 export interface PdfPoolOptions {
   /** Extractions running at once. */
@@ -58,10 +70,23 @@ const CHILD_HEAP_MB = 256;
 /**
  * Resident memory of the parser process, polled by the parent. Array buffers
  * (decoded streams) live outside the V8 heap, so the heap limit alone does not
- * bound them; this does.
+ * bound them. Polling can overshoot between two polls; CHILD_DATA_LIMIT_BYTES
+ * is the hard bound.
  */
 const CHILD_RSS_LIMIT_BYTES = 512 * 1024 * 1024;
-const RSS_POLL_MS = process.platform === "linux" ? 100 : 250;
+const RSS_POLL_MS = process.platform === "linux" ? 50 : 250;
+/**
+ * RLIMIT_DATA of the parser process, set by the kernel through util-linux
+ * prlimit when it is installed (it is in the Docker image). Private writable
+ * memory, including array buffers, cannot grow past it: allocation fails and
+ * the process aborts. Node needs about 96 MB of it to start.
+ */
+const CHILD_DATA_LIMIT_BYTES = 768 * 1024 * 1024;
+const PRLIMIT = "/usr/bin/prlimit";
+/** The child kills itself this long after its timeout, in case the server could not. */
+const CHILD_DEADLINE_MARGIN_MS = 2_000;
+/** SIGKILL is resent at this interval until the child has exited. */
+const KILL_RETRY_MS = 1_000;
 
 const busyError = () => new MailError("rate_limited", "Too many PDF attachments are being read right now. Try again in a few seconds.");
 
@@ -69,7 +94,7 @@ export function createPdfPool(options: PdfPoolOptions = {}): PdfPool {
   const maxRunning = options.maxRunning ?? 2;
   const maxAdmitted = options.maxAdmitted ?? 8;
   const maxAdmittedBytes = options.maxAdmittedBytes ?? 64 * 1024 * 1024;
-  const run = options.run ?? runPdfChild;
+  const run = options.run ?? startPdfChild;
   let admitted = 0;
   let admittedBytes = 0;
   let running = 0;
@@ -118,13 +143,20 @@ export function createPdfPool(options: PdfPoolOptions = {}): PdfPool {
             if (signal?.aborted) throw cancelledError();
             if (running >= maxRunning || waiting.length > 0) await waitForSlot(deadline, controller.signal);
             else running += 1;
+            let started: PdfRun | undefined;
             try {
               const remaining = deadline - Date.now();
               if (remaining <= 0) throw busyError();
-              return await run(bytes, { maxPages: job.maxPages, maxChars: job.maxChars, timeoutMs: remaining }, controller.signal);
+              started = run(bytes, { maxPages: job.maxPages, maxChars: job.maxChars, timeoutMs: remaining }, controller.signal);
+              return await started.result;
             } finally {
-              running -= 1;
-              wake();
+              // The slot is free only once the process is gone, not when the call settles.
+              const free = () => {
+                running -= 1;
+                wake();
+              };
+              if (started) void started.exited.then(free, free);
+              else free();
             }
           } finally {
             signal?.removeEventListener("abort", onAbort);
@@ -173,37 +205,80 @@ export function looksLikePdf(bytes: Uint8Array): boolean {
 interface ChildOptions {
   heapMb?: number;
   rssLimitBytes?: number;
+  /** RLIMIT_DATA; null runs without it. Ignored where prlimit is not installed. */
+  dataLimitBytes?: number | null;
 }
+
+/** Parser processes not yet exited, killed when the server exits. */
+const liveChildren = new Set<ChildProcess>();
 
 /**
  * Extracts text in a separate Node process, so a hostile PDF cannot block the
  * server's event loop or take its memory. The process gets a heap limit, a
- * resident-memory watchdog and the remaining time budget, and is killed with
- * SIGKILL on any of them. It gets no environment variables. Failures reject
- * with MailError("parse_error").
+ * kernel data limit (where prlimit exists), a resident-memory watchdog and the
+ * remaining time budget, and is killed with SIGKILL on the watchdog or the
+ * timeout. It also kills itself after the timeout plus a margin, or when the
+ * server goes away. It gets no environment variables. Failures reject with
+ * MailError("parse_error").
  */
-export function runPdfChild(
+export function startPdfChild(
   bytes: Uint8Array,
   job: { maxPages: number; maxChars: number; timeoutMs: number },
   signal: AbortSignal,
   childOptions: ChildOptions = {},
-): Promise<PdfText> {
+): PdfRun {
   const rssLimit = childOptions.rssLimitBytes ?? CHILD_RSS_LIMIT_BYTES;
-  return new Promise((resolve, reject) => {
-    const entry = childEntry();
-    let child: ChildProcess;
+  const entry = pdfChildEntry();
+  const nodeArgs = [...entry.execArgv, `--max-old-space-size=${childOptions.heapMb ?? CHILD_HEAP_MB}`, "--max-semi-space-size=16"];
+  const dataLimit = childOptions.dataLimitBytes === undefined ? CHILD_DATA_LIMIT_BYTES : childOptions.dataLimitBytes;
+  // fork runs `execPath ...execArgv entry ...args`, so prlimit execs node with the limit applied.
+  // --core=0: a crash dump would hold the document.
+  const viaPrlimit = dataLimit !== null && hasPrlimit();
+  let child: ChildProcess;
+  try {
+    child = fork(entry.path, [String(job.timeoutMs + CHILD_DEADLINE_MARGIN_MS)], {
+      ...(viaPrlimit ? { execPath: PRLIMIT } : {}),
+      execArgv: viaPrlimit ? [`--data=${dataLimit}`, "--core=0", "--", process.execPath, ...nodeArgs] : nodeArgs,
+      env: {},
+      serialization: "advanced",
+      // pdf.js output is discarded; it could quote document content.
+      stdio: ["ignore", "ignore", "ignore", "ipc"],
+    });
+  } catch {
+    return { result: Promise.reject(new MailError("parse_error", "PDF text could not be extracted.")), exited: Promise.resolve() };
+  }
+  liveChildren.add(child);
+  let markExited!: () => void;
+  const exited = new Promise<void>((resolve) => (markExited = resolve));
+  let gone = false;
+  let retry: ReturnType<typeof setInterval> | undefined;
+  const onGone = () => {
+    if (gone) return;
+    gone = true;
+    clearInterval(retry);
+    liveChildren.delete(child);
+    markExited();
+  };
+  child.once("exit", onGone);
+  // kill() reports a failure by returning false or emitting "error"; keep sending SIGKILL until "exit".
+  const kill = () => {
+    if (gone || child.exitCode !== null || child.signalCode !== null) return;
     try {
-      child = fork(entry.path, [], {
-        execArgv: [...entry.execArgv, `--max-old-space-size=${childOptions.heapMb ?? CHILD_HEAP_MB}`, "--max-semi-space-size=16"],
-        env: {},
-        serialization: "advanced",
-        // pdf.js output is discarded; it could quote document content.
-        stdio: ["ignore", "ignore", "ignore", "ipc"],
-      });
+      child.kill("SIGKILL");
     } catch {
-      reject(new MailError("parse_error", "PDF text could not be extracted."));
-      return;
+      // Retried below.
     }
+    retry ??= setInterval(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // Try again next interval.
+      }
+    }, KILL_RETRY_MS);
+    retry.unref();
+  };
+
+  const result = new Promise<PdfText>((resolve, reject) => {
     let settled = false;
     let polling = false;
     const finish = (fn: () => void) => {
@@ -212,7 +287,7 @@ export function runPdfChild(
       clearTimeout(timer);
       clearInterval(poll);
       signal.removeEventListener("abort", onAbort);
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      kill();
       fn();
     };
     const fail = (message: string) => finish(() => reject(new MailError("parse_error", message)));
@@ -241,21 +316,71 @@ export function runPdfChild(
         } else reject(new MailError("parse_error", pdfFailure(reply.kind)));
       });
     });
-    child.once("error", () => fail("PDF text could not be extracted."));
+    child.on("error", () => {
+      // A process that never started emits no "exit".
+      if (child.pid === undefined) onGone();
+      fail("PDF text could not be extracted.");
+    });
     // "close" comes after the IPC channel has closed, so a reply sent just before exiting is read first.
     child.once("close", (code, exitSignal) => {
-      // V8 aborts on heap exhaustion; the watchdog and timeout use SIGKILL and settle first.
+      // V8 aborts on heap or data-limit exhaustion; the watchdog and timeout use SIGKILL and settle first.
       fail(code !== 0 || exitSignal ? "The PDF is too complex to extract text from." : "PDF text could not be extracted.");
     });
     child.send({ bytes, maxPages: job.maxPages, maxChars: job.maxChars }, (err) => {
       if (err) fail("PDF text could not be extracted.");
     });
   });
+  return { result, exited, ...(child.pid !== undefined ? { pid: child.pid } : {}) };
+}
+
+/** startPdfChild, settling with the extraction result. */
+export function runPdfChild(
+  bytes: Uint8Array,
+  job: { maxPages: number; maxChars: number; timeoutMs: number },
+  signal: AbortSignal,
+  childOptions: ChildOptions = {},
+): Promise<PdfText> {
+  return startPdfChild(bytes, job, signal, childOptions).result;
+}
+
+/** SIGKILLs every parser process still running. Safe to call more than once. */
+export function killPdfChildren(): void {
+  for (const child of liveChildren) {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Already gone.
+    }
+  }
+}
+
+let hooksInstalled = false;
+/**
+ * Kills parser processes when the server exits. SIGTERM and SIGINT would
+ * otherwise end the server without an "exit" event; their handlers kill the
+ * children and exit with the usual 128 + signal number status.
+ */
+export function installPdfShutdownHooks(): void {
+  if (hooksInstalled) return;
+  hooksInstalled = true;
+  process.once("exit", killPdfChildren);
+  for (const name of ["SIGTERM", "SIGINT"] as const) {
+    process.once(name, () => {
+      killPdfChildren();
+      process.exit(128 + osConstants.signals[name]);
+    });
+  }
+}
+
+let prlimitPresent: boolean | undefined;
+function hasPrlimit(): boolean {
+  prlimitPresent ??= process.platform === "linux" && existsSync(PRLIMIT);
+  return prlimitPresent;
 }
 
 let resolvedEntry: { path: string; execArgv: string[] } | undefined;
 /** dist/mail/pdf-child.js in a build; src/mail/pdf-child.ts (type-stripped) when running from source. */
-function childEntry(): { path: string; execArgv: string[] } {
+export function pdfChildEntry(): { path: string; execArgv: string[] } {
   if (resolvedEntry) return resolvedEntry;
   const js = fileURLToPath(new URL("./pdf-child.js", import.meta.url));
   if (existsSync(js)) resolvedEntry = { path: js, execArgv: [] };

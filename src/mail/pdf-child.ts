@@ -1,12 +1,14 @@
 /**
  * Child process entry for PDF text extraction (started by pdf.ts). It reads
- * one job from IPC, replies once and exits. It has no project imports and only
+ * one job from IPC, replies once and exits. argv[2] is its own deadline in
+ * milliseconds: past it, or once the server is gone, it kills itself. It has no project imports and only
  * erasable TypeScript, so tests can run it from source with Node's type
  * stripping. Font loading is off (the bundled pdf.js 5 has no eval-based font
  * compiler). Only page counts and text are sent back; error text is reduced to
  * a kind.
  */
 import { writeFileSync } from "node:fs";
+import { Worker } from "node:worker_threads";
 
 interface Job {
   bytes: Uint8Array;
@@ -31,6 +33,32 @@ try {
 } catch {
   // Not Linux, or not permitted.
 }
+
+// The server normally kills this process. In case it cannot (it crashed, or
+// was killed itself), exit when the IPC channel closes, and run a watchdog
+// thread that SIGKILLs the process at the deadline or when the parent changes.
+// The watchdog has its own event loop, so it fires even while a synchronous
+// decode blocks this thread; "disconnect" only fires between tasks.
+const parentPid = process.ppid;
+if (!process.connected) process.exit(1);
+process.once("disconnect", () => process.exit(1));
+const deadlineMs = Number(process.argv[2]);
+const watchdog = new Worker(
+  `const { workerData } = require("node:worker_threads");
+  const end = Date.now() + workerData.deadlineMs;
+  setInterval(() => {
+    if (Date.now() >= end || process.ppid !== workerData.parentPid) process.kill(process.pid, "SIGKILL");
+  }, 100);`,
+  {
+    eval: true,
+    workerData: { deadlineMs: Number.isFinite(deadlineMs) && deadlineMs > 0 ? deadlineMs : 60_000, parentPid },
+    env: {},
+    resourceLimits: { maxOldGenerationSizeMb: 16, maxYoungGenerationSizeMb: 4 },
+    stdout: true,
+    stderr: true,
+  },
+);
+watchdog.unref();
 
 process.once("message", (message: unknown) => {
   void extract(message as Job).then((reply) => {
