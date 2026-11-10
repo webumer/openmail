@@ -111,7 +111,7 @@ describe.skipIf(!live)("web accounts against GreenMail", () => {
     });
     expect(probe.status).toBe(200);
     const probeHtml = await readHtml(probe);
-    expect(probeHtml).toContain("Signed in to IMAP and SMTP");
+    expect(probeHtml).toContain("IMAP: Signed in. SMTP: Signed in.");
     expect(probeHtml).not.toMatch(/id="mailbox-password"[^>]*value="/);
     expect(mailAccounts.list(db, userIdFromDb()).length).toBe(0);
 

@@ -39,6 +39,7 @@ describe("MCP HTTP tools", () => {
     try {
       const listed = await client.listTools();
       expect(listed.tools.map((tool) => tool.name).sort()).toEqual([
+        "get_attachment",
         "list_accounts",
         "list_folders",
         "read_message",

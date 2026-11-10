@@ -866,6 +866,7 @@ describe("OAuth 2.1 authorization server", () => {
     await client2.connect(new StreamableHTTPClientTransport(serverUrl, { authProvider: provider }));
     const tools = await client2.listTools();
       expect(tools.tools.map((t) => t.name).sort()).toEqual([
+        "get_attachment",
         "list_accounts",
         "list_folders",
         "read_message",

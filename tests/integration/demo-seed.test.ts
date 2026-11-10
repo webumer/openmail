@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { seedDemoMailbox } from "../../src/demo/seed.js";
 import { demoMessages } from "../../src/demo/messages.js";
 import { createImapGateway } from "../../src/mail/imap-gateway.js";
+import { getAttachment } from "../../src/mail/get-attachment.js";
 import { listFolders, readMessage, readThread, searchMessages, type MailDeps } from "../../src/mail/operations.js";
 import type { AccountCredentials, CredentialStore } from "../../src/store/types.js";
 
@@ -64,7 +65,12 @@ describe.skipIf(!live)("demo mailbox seeding", () => {
     expect(invoice.ok && invoice.data.messages.length).toBe(1);
     const uid = invoice.ok ? invoice.data.messages[0]!.uid : 0;
     const read = await readMessage(d, "u", "demo", "INBOX", uid);
-    expect(read.ok && read.data.attachments.map((a) => a.filename)).toEqual(["invoice-NW-2026-1042.pdf"]);
+    expect(read.ok && read.data.attachments.map((a) => [a.index, a.part, a.filename])).toEqual([[0, "2", "invoice-NW-2026-1042.pdf"]]);
+    const pdf = await getAttachment(d, "u", "demo", "INBOX", uid, { index: 0 });
+    expect(pdf).toMatchObject({ ok: true, truncated: false, data: { kind: "pdf", pages: 1, filename: "invoice-NW-2026-1042.pdf" } });
+    expect(pdf.ok && pdf.data.text).toContain("Invoice NW-2026-1042");
+    expect(pdf.ok && pdf.data.text).toContain("Total due ....................... USD 14.40");
+    const unseenBefore = await searchMessages(d, "u", "demo", { unread: true });
 
     const leo = await searchMessages(d, "u", "demo", { from: "leo@acme.example" });
     const leoUid = leo.ok ? leo.data.messages[0]!.uid : 0;
@@ -83,5 +89,6 @@ describe.skipIf(!live)("demo mailbox seeding", () => {
 
     const unread = await searchMessages(d, "u", "demo", { unread: true });
     expect(unread.ok && unread.data.messages.length).toBe(expectedInbox.filter((m) => !m.seen).length);
+    expect(unseenBefore.ok && unseenBefore.data.messages.length).toBe(expectedInbox.filter((m) => !m.seen).length);
   });
 });

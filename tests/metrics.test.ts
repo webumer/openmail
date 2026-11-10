@@ -28,6 +28,19 @@ describe("private daily metrics", () => {
     expect(aggregateMetrics(db, 14, "mailbox_test", now)).toEqual([{ kind: "mailbox_test", name: "gmail", outcome: "imap:auth_failed", bucket: "", count: 3 }]);
   });
 
+  it("counts get_attachment outcomes without file names", () => {
+    setup();
+    const metrics = createMetricRecorder(db, () => Date.parse("2026-11-11T12:00:00Z"));
+    metrics.record({ kind: "tool_call", name: "get_attachment", outcome: "ok", bucket: "<1s" });
+    metrics.record({ kind: "tool_call", name: "get_attachment", outcome: "too_large", bucket: "1-5s" });
+    metrics.record({ kind: "tool_call", name: "get_attachment", outcome: "parse_error", bucket: "<1s" });
+    metrics.record({ kind: "tool_call", name: "invoice-NW-2026-1042.pdf", outcome: "ok", bucket: "<1s" });
+    metrics.record({ kind: "tool_call", name: "get_attachment", outcome: "invoice.pdf", bucket: "<1s" });
+    const rows = aggregateMetrics(db, 14, "tool_call", Date.parse("2026-11-11T12:00:00Z"));
+    expect(rows.map((row) => row.outcome)).toEqual(["ok", "parse_error", "too_large"]);
+    expect(JSON.stringify(rows)).not.toContain("pdf");
+  });
+
   it("prunes after 400 UTC days and ignores recorder failures", () => {
     setup();
     const now = Date.parse("2026-11-02T12:00:00Z");

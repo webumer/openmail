@@ -18,11 +18,11 @@ import {
 import { decodeCursor, encodeCursor, type CursorPayload } from "./cursor.js";
 import { headerValue, normalizeDate, type NormalizedDate } from "./dates.js";
 import type { ImapGateway } from "./imap-gateway.js";
-import { parseMessage, type AttachmentInfo, type MessageHeaders } from "./parse-message.js";
+import { parseMessage, type MessageHeaders } from "./parse-message.js";
 import { fail, ok, type ToolResult } from "./result.js";
 import { buildSearchQuery } from "./search-query.js";
 import type { FetchedMessage, ImapSession, MessageFetchQuery } from "./session.js";
-import { hasAttachments } from "./structure.js";
+import { hasAttachments, listAttachments, type ListedAttachment } from "./structure.js";
 import { allocateText, capText } from "./text.js";
 import { collectThreadIds, limitThreadUids, threadAlgorithm } from "./thread.js";
 
@@ -117,7 +117,7 @@ export interface ReadMessage {
   folder: string;
   headers: MessageHeaders;
   text: string;
-  attachments: AttachmentInfo[];
+  attachments: ListedAttachment[];
   flags: string[];
   seen: boolean;
   size: number | null;
@@ -127,7 +127,7 @@ export interface ThreadMessage {
   uid: number;
   headers: MessageHeaders;
   text: string;
-  attachments: AttachmentInfo[];
+  attachments: ListedAttachment[];
   flags: string[];
   seen: boolean;
 }
@@ -284,7 +284,7 @@ export async function readMessage(
           folder: path,
           headers: parsed.headers,
           text: capped.text,
-          attachments: parsed.attachments,
+          attachments: listAttachments(parsed.attachments, fetched.bodyStructure, { partial }),
           flags: [...fetched.flags].sort(),
           seen: isSeen(fetched.flags),
           size: fetched.size,
@@ -349,7 +349,7 @@ export async function readThread(
             uid: item.message.uid,
             headers: item.body.headers,
             text: budget.parts[index] ?? "",
-            attachments: item.body.attachments,
+            attachments: listAttachments(item.body.attachments, item.message.bodyStructure, { partial: sourceTruncated(item.message, THREAD_SOURCE_CAP_BYTES) }),
             flags: [...item.message.flags].sort(),
             seen: isSeen(item.message.flags),
           })),
@@ -571,7 +571,7 @@ function headerFrom(message: FetchedMessage, name: string): string | null {
   return headerValue(message.headers.toString("utf8"), name);
 }
 
-async function parseSource(source: Buffer): Promise<Awaited<ReturnType<typeof parseMessage>>> {
+export async function parseSource(source: Buffer): Promise<Awaited<ReturnType<typeof parseMessage>>> {
   try {
     return await parseMessage(source);
   } catch {
@@ -610,14 +610,14 @@ function normalizeLimit(limit: number | undefined): number {
   return limit;
 }
 
-function requireFolder(folder: string): string {
+export function requireFolder(folder: string): string {
   if (typeof folder !== "string" || folder.trim() === "") {
     throw new MailError("invalid_argument", "folder is required");
   }
   return folder.trim();
 }
 
-function requireUid(uid: number): void {
+export function requireUid(uid: number): void {
   if (!Number.isSafeInteger(uid) || uid <= 0) {
     throw new MailError("invalid_argument", "uid must be a positive integer");
   }
@@ -629,7 +629,7 @@ function requireUser(userId: string): void {
   }
 }
 
-async function requireAccount(store: CredentialStore, userId: string, accountId: string): Promise<AccountCredentials> {
+export async function requireAccount(store: CredentialStore, userId: string, accountId: string): Promise<AccountCredentials> {
   requireUser(userId);
   if (typeof accountId !== "string" || accountId.trim() === "") {
     throw new MailError("invalid_argument", "account is required");
@@ -639,7 +639,7 @@ async function requireAccount(store: CredentialStore, userId: string, accountId:
   return account;
 }
 
-function isSeen(flags: readonly string[]): boolean {
+export function isSeen(flags: readonly string[]): boolean {
   return flags.some((flag) => flag.toLowerCase() === "\\seen");
 }
 
@@ -650,7 +650,7 @@ function isNoselect(flags: readonly string[]): boolean {
   });
 }
 
-async function guard<T>(fn: () => Promise<ToolResult<T>>): Promise<ToolResult<T>> {
+export async function guard<T>(fn: () => Promise<ToolResult<T>>): Promise<ToolResult<T>> {
   try {
     return await fn();
   } catch (err) {

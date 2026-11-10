@@ -42,6 +42,24 @@ export const readMessageInput = z
 
 export const readThreadInput = readMessageInput;
 
+export const getAttachmentInput = z
+  .object({
+    account: accountId,
+    folder: z.string().min(1).max(1000).describe("Mailbox path"),
+    uid: z.number().int().positive().max(4294967295).describe("IMAP UID"),
+    index: z.number().int().min(0).max(10_000).optional().describe("Attachment index from read_message (attachments[].index, starting at 0)"),
+    part: z
+      .string()
+      .regex(/^[1-9]\d{0,5}(?:\.[1-9]\d{0,5}){0,15}$/)
+      .optional()
+      .describe("MIME part number from read_message (attachments[].part), for example \"2\" or \"1.2\". Pass index or part."),
+    include_base64: z
+      .boolean()
+      .default(false)
+      .describe("Also return the file as base64 when it is within the size limit (default 10 MB). Needed for images and other files that are not converted to text."),
+  })
+  .strict();
+
 /**
  * Every tool only reads the caller's own mailboxes: no writes, no deletes, and
  * no reach beyond the user's bounded private account, so openWorldHint is

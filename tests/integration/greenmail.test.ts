@@ -4,6 +4,8 @@ import nodemailer from "nodemailer";
 import { beforeAll, describe, expect, it } from "vitest";
 import { parseConfig } from "../../src/config/index.js";
 import { BODY_CHAR_CAP, THREAD_CHAR_CAP, UNTRUSTED_CONTENT_WARNING } from "../../src/mail/constants.js";
+import { invoicePdf } from "../../src/demo/messages.js";
+import { getAttachment } from "../../src/mail/get-attachment.js";
 import { createImapGateway } from "../../src/mail/imap-gateway.js";
 import {
   listFolders,
@@ -22,7 +24,7 @@ const IMAP_USER = "test";
 const IMAP_PASS = "test";
 const ACCOUNT = "test";
 const USER = "default";
-const SEEDED = 15;
+const SEEDED = 16;
 
 const live = (await probe(IMAP_PORT)) && (await probe(SMTP_PORT));
 if (!live) {
@@ -48,6 +50,7 @@ describe.skipIf(!live)(
       t3: `${run} thread 3`,
       big1: `${run} big 1`,
       big2: `${run} big 2`,
+      files: `${run} files`,
       page: (n: number) => `${run} page ${n}`,
     };
     const ids = {
@@ -61,6 +64,7 @@ describe.skipIf(!live)(
       t3: `<${run}-t3@example.com>`,
       big1: `<${run}-big1@example.com>`,
       big2: `<${run}-big2@example.com>`,
+      files: `<${run}-files@example.com>`,
     };
     const plainFrom = `plain-${run}@example.com`;
     const plainToken = `plain-token-${run}`;
@@ -164,6 +168,7 @@ describe.skipIf(!live)(
         date: "Mon, 01 Jun 2026 00:00:00 +0000",
         text: bigBody,
       }));
+      await send(filesRaw(subjects.files, ids.files));
       for (let n = 1; n <= 5; n += 1) {
         await send(buildRaw({
           from: "Page <page@example.com>",
@@ -186,6 +191,7 @@ describe.skipIf(!live)(
         ["t3", subjects.t3],
         ["big1", subjects.big1],
         ["big2", subjects.big2],
+        ["files", subjects.files],
       ];
       for (const [name, subject] of named) {
         uids.set(name, (await findOne(deps, subject)).uid);
@@ -230,7 +236,7 @@ describe.skipIf(!live)(
 
       const attached = await searchMessages(deps, USER, ACCOUNT, { subject: run, has_attachment: true, limit: 50 });
       expectOk(attached);
-      expect(attached.data.messages.map((message) => message.subject)).toEqual([subjects.attach]);
+      expect(attached.data.messages.map((message) => message.subject)).toEqual([subjects.files, subjects.attach]);
       expect(attached.data.messages[0]?.has_attachments).toBe(true);
 
       const since = utcDay(-30);
@@ -283,6 +289,8 @@ describe.skipIf(!live)(
       expectOk(attached);
       expect(attached.data.attachments).toEqual([
         {
+          index: 0,
+          part: "2",
           filename: "note.txt",
           content_type: expect.stringContaining("text/plain"),
           size: "attachment-bytes".length,
@@ -312,6 +320,53 @@ describe.skipIf(!live)(
       expect(result.data.seen).toBe(false);
       const after = await flagsOf(target);
       expect(seen(after)).toBe(false);
+    });
+
+    it("lists attachment index and part, and get_attachment reads only that part without setting \\Seen", async () => {
+      const target = uid("files");
+      expect(seen(await flagsOf(target))).toBe(false);
+      const read = await readMessage(deps, USER, ACCOUNT, "INBOX", target);
+      expectOk(read);
+      expect(read.data.attachments.map((a) => [a.index, a.part, a.filename])).toEqual([
+        [0, "2", "invoice.pdf"],
+        [1, "3", "prices.csv"],
+        [2, "4", "page.html"],
+        [3, "5", "dot.png"],
+      ]);
+
+      const pdf = await getAttachment(deps, USER, ACCOUNT, "INBOX", target, { index: 0 });
+      expectOk(pdf);
+      expect(pdf.data).toMatchObject({ kind: "pdf", part: "2", pages: 1, pages_read: 1, filename: "invoice.pdf", size: invoicePdf().length });
+      expect(pdf.data.text).toContain("Total due ....................... USD 14.40");
+      expect(pdf.warnings).toContain(UNTRUSTED_CONTENT_WARNING);
+
+      const csv = await getAttachment(deps, USER, ACCOUNT, "INBOX", target, { part: "3" });
+      expectOk(csv);
+      expect(csv.data).toMatchObject({ kind: "text", index: 1, charset: "windows-1252" });
+      // The CRLF before the boundary belongs to the delimiter, not the part.
+      expect(csv.data.text).toBe("item,price\r\ncrème brûlée,4.50");
+
+      const html = await getAttachment(deps, USER, ACCOUNT, "INBOX", target, { index: 2 });
+      expectOk(html);
+      expect(html.data.text).toBe("Hello bold");
+
+      const png = await getAttachment(deps, USER, ACCOUNT, "INBOX", target, { index: 3 });
+      expectOk(png);
+      expect(png.data).toMatchObject({ kind: "binary", base64: null, text: null });
+      const pngBytes = await getAttachment(deps, USER, ACCOUNT, "INBOX", target, { index: 3, include_base64: true });
+      expectOk(pngBytes);
+      expect(pngBytes.data.base64).toBe(PNG.toString("base64"));
+
+      const capped = await getAttachment({ ...deps, attachmentLimits: { maxBytes: 64 * 1024, base64MaxBytes: 64 * 1024, pdfMaxPages: 100, pdfTimeoutMs: 10_000 } },
+        USER, ACCOUNT, "INBOX", uid("huge"), { part: "1" });
+      expectOk(capped);
+      expect(capped.data.text?.length).toBe(BODY_CHAR_CAP);
+      expect(capped.data.text_length).toBe(BODY_CHAR_CAP + "TAILMARKER".length);
+      expect(capped.truncated).toBe(true);
+
+      expect(await getAttachment(deps, USER, ACCOUNT, "INBOX", target, { index: 9 })).toMatchObject({ ok: false, error: { code: "not_found" } });
+      expect(seen(await flagsOf(target))).toBe(false);
+      expect(seen(await flagsOf(uid("huge")))).toBe(false);
     });
 
     it("reads a thread oldest-first and caps the combined body at 40,000 characters", async () => {
@@ -487,6 +542,33 @@ interface Outgoing {
   text?: string;
   html?: string;
   attachment?: { filename: string; contentType: string; content: string };
+}
+
+const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489", "hex");
+
+function filesRaw(subject: string, messageId: string): string {
+  const boundary = `b${messageId.replace(/[^A-Za-z0-9]/g, "")}`;
+  const b64 = (bytes: Buffer) => bytes.toString("base64").replace(/.{76}/g, "$&\r\n");
+  const part = (headers: string[], body: string) => [`--${boundary}`, ...headers, "", body].join("\r\n");
+  return [
+    "From: Files <files@example.com>",
+    "To: Test <test@localhost>",
+    `Subject: ${subject}`,
+    "Date: Thu, 01 Jan 2026 00:00:00 +0000",
+    `Message-ID: ${messageId}`,
+    "MIME-Version: 1.0",
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    "",
+    part(["Content-Type: text/plain; charset=utf-8"], "four files attached"),
+    part(["Content-Type: application/pdf", 'Content-Disposition: attachment; filename="invoice.pdf"', "Content-Transfer-Encoding: base64"], b64(invoicePdf())),
+    part(["Content-Type: text/csv; charset=iso-8859-1", 'Content-Disposition: attachment; filename="prices.csv"', "Content-Transfer-Encoding: quoted-printable"],
+      "item,price\r\ncr=E8me br=FBl=E9e,4.50\r\n"),
+    part(["Content-Type: text/html; charset=utf-8", 'Content-Disposition: attachment; filename="page.html"'],
+      "<html><body><p>Hello <b>bold</b></p><script>ignore-me</script></body></html>"),
+    part(["Content-Type: image/png", 'Content-Disposition: attachment; filename="dot.png"', "Content-Transfer-Encoding: base64"], b64(PNG)),
+    `--${boundary}--`,
+    "",
+  ].join("\r\n");
 }
 
 function buildRaw(message: Outgoing): string {

@@ -63,6 +63,12 @@ export interface ImapSession {
   search(query: SearchObject): Promise<number[]>;
   fetchOne(uid: number, query: MessageFetchQuery): Promise<FetchedMessage | null>;
   fetchAll(uids: number[], query: MessageFetchQuery): Promise<FetchedMessage[]>;
+  /**
+   * Raw (still transfer-encoded) bytes of one body section ("2", "1.3", or
+   * "TEXT" for a single-part message), at most `maxBytes`, fetched as
+   * `BODY.PEEK[section]<0.maxBytes>`. Null when the message or part is missing.
+   */
+  fetchPart(uid: number, section: string, maxBytes: number): Promise<Buffer | null>;
   thread?(algorithm: ThreadAlgorithm, seedUid: number): Promise<number[] | null>;
 }
 

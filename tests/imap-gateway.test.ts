@@ -1,6 +1,7 @@
-import { ImapFlow, type FetchQueryObject, type ImapFlowOptions } from "imapflow";
+import { ImapFlow, type FetchQueryObject, type ImapFlowOptions, type MessageStructureObject } from "imapflow";
 import { describe, expect, it } from "vitest";
 import { createImapGateway } from "../src/mail/imap-gateway.js";
+import { getAttachment } from "../src/mail/get-attachment.js";
 import { listFolders, readMessage, readThread } from "../src/mail/operations.js";
 import type { CredentialStore } from "../src/store/types.js";
 import { SECRET, account } from "./fixtures.js";
@@ -23,6 +24,29 @@ describe("imap gateway", () => {
     expect(client.calls.map((call) => call.method)).toEqual(["connect", "getMailboxLock", "fetchOne", "logout"]);
     expect(client.lockReleased).toBe(true);
     expect(JSON.stringify(result)).not.toContain(SECRET);
+  });
+
+  it("fetches one attachment as a bounded part, read-only, without the message source or BINARY", async () => {
+    const client = fakeClient();
+    client.structure = {
+      type: "multipart/mixed",
+      childNodes: [
+        { part: "1", type: "text/plain", size: 5 },
+        { part: "2", type: "text/plain", disposition: "attachment", dispositionParameters: { filename: "a.txt" }, encoding: "BASE64", size: 8 },
+      ],
+    };
+    const gateway = createImapGateway(() => client, { resolve: publicDns });
+    const result = await getAttachment({ ...deps(gateway), attachmentLimits: { maxBytes: 64 * 1024, base64MaxBytes: 64 * 1024, pdfMaxPages: 1, pdfTimeoutMs: 1_000 } },
+      "user-1", "work", "INBOX", 9, { part: "2" });
+    expect(result).toMatchObject({ ok: true, data: { text: "hello", index: 0, filename: "a.txt" } });
+    expect(client.calls.find((call) => call.method === "getMailboxLock")?.args).toEqual(["INBOX", { readOnly: true }]);
+    const fetches = client.calls.filter((call) => call.method === "fetchOne");
+    expect(fetches.map((call) => call.args[1])).toEqual([
+      { uid: true, bodyStructure: true, size: true },
+      { uid: true, bodyParts: [{ key: "2", start: 0, maxLength: Math.ceil(((64 * 1024 * 4) / 3) * 78 / 76) + 4_096 + 1 }] },
+    ]);
+    expect(fetches.every((call) => JSON.stringify(call.args[2]) === JSON.stringify({ uid: true }))).toBe(true);
+    expect(client.lockReleased).toBe(true);
   });
 
   it("releases the mailbox lock and closes without logout when fetch fails", async () => {
@@ -192,6 +216,8 @@ function fakeClient() {
   const client = {
     calls,
     fetchError: null as Error | null,
+    /** When set, fetchOne answers BODYSTRUCTURE and bodyParts queries. */
+    structure: null as MessageStructureObject | null,
     lockReleased: false,
     loggedOut: false,
     nextCalled: false,
@@ -229,6 +255,11 @@ function fakeClient() {
     async fetchOne(uid: number, query: FetchQueryObject, options?: { uid?: boolean }) {
       calls.push({ method: "fetchOne", args: [uid, query, options] });
       if (client.fetchError) throw client.fetchError;
+      if (client.structure) {
+        return query.bodyParts
+          ? { seq: 1, uid, bodyParts: new Map([["2", Buffer.from("aGVsbG8=")]]) }
+          : { seq: 1, uid, bodyStructure: client.structure, flags: new Set<string>(), size: 400 };
+      }
       return {
         seq: 1,
         uid,

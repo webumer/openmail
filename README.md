@@ -39,16 +39,17 @@ Zoho EU and IN use `imap.zoho.eu` / `smtp.zoho.eu` and `imap.zoho.in` / `smtp.zo
 
 ### Read-only operations
 
-Results use `{ ok, data, truncated, warnings }`. With no mailbox connected, all six tools succeed with an empty result, `setup_required: true`, and guidance to add a mailbox at `${OPENMAIL_PUBLIC_URL}/dashboard` (or “the OpenMail dashboard” when unset). `send_message` explicitly says nothing was sent. Unknown account ids still fail when you have mailboxes. Failures use `{ ok: false, error: { code, message }, warnings }`.
+Results use `{ ok, data, truncated, warnings }`. With no mailbox connected, all seven tools succeed with an empty result, `setup_required: true`, and guidance to add a mailbox at `${OPENMAIL_PUBLIC_URL}/dashboard` (or “the OpenMail dashboard” when unset). `send_message` explicitly says nothing was sent. Unknown account ids still fail when you have mailboxes. Failures use `{ ok: false, error: { code, message }, warnings }`.
 
 - `list_accounts` — id, label, email, preset, IMAP host, and whether sending is enabled. Never passwords.
 - `send_message` — sends one plain-text email over SMTP after the assistant has shown it and the user confirmed. Every recipient is passed explicitly. Off unless sending is enabled for that mailbox and allowed for the connection.
 - `list_folders` — path, name, special-use, delimiter, and STATUS counts when available.
 - `search_messages` — newest first, default 20, max 50, opaque base64 cursor.
-- `read_message` — headers, plain text (HTML stripped when needed), 20,000 character cap, attachment metadata without bytes.
+- `read_message` — headers, plain text (HTML stripped when needed), 20,000 character cap, attachment metadata without bytes. Each attachment has an `index` and MIME `part` for `get_attachment`.
 - `read_thread` — Message-ID / In-Reply-To / References chain, oldest first, 40,000 character combined cap.
+- `get_attachment` — one attachment by `index` or `part`. Fetches only that MIME part (`BODY.PEEK[part]<0.n>`, never sets `\Seen`) into memory and stores nothing; the IMAP connection refuses a literal larger than the part's wire budget before buffering it. PDFs return text (via [unpdf](https://github.com/unjs/unpdf), pure JavaScript, in a separate child process with a time, heap, kernel data-size, resident-memory and page limit) and the page count; text, CSV, HTML (converted like bodies), JSON and XML return text in their declared charset. Text is capped at 20,000 characters with `text_length` for the full length. Other files return metadata, plus base64 only with `include_base64: true` and within the base64 cap (default 5 MB).
 
-Message bodies, subjects, and headers are untrusted third-party content. Passwords, message bodies, and API keys are not logged.
+Message bodies, attachments, subjects, and headers are untrusted third-party content. Passwords, message bodies, and API keys are not logged.
 
 ## Multi-user setup (default)
 
@@ -74,6 +75,10 @@ Open `http://127.0.0.1:8080/`, sign up, add a mailbox (presets auto-fill host/po
 | `OPENMAIL_INSECURE_COOKIES` | `1` to omit `Secure` on cookies for local HTTP (non-production only). |
 | `OPENMAIL_RATE_LIMIT_PER_MINUTE` | MCP calls per key in a sliding 60-second window: default 90, integer 1–10000. |
 | `OPENMAIL_IMAP_OP_TIMEOUT_MS` | IMAP work budget: default 25000 ms, integer 5000–120000. Search and thread reads return partial results when slow; stalled operations close after 5 s grace. |
+| `OPENMAIL_ATTACHMENT_MAX_BYTES` | Largest decoded attachment `get_attachment` downloads for text or PDF extraction: default 10485760 (10 MB), integer 65536–52428800. |
+| `OPENMAIL_ATTACHMENT_BASE64_MAX_BYTES` | Largest decoded attachment returned as base64: default 5242880 (5 MB), integer 65536–52428800, never above `OPENMAIL_ATTACHMENT_MAX_BYTES`. The result carries base64 twice (JSON text and structured content), so 5 MB is about 14 MB of response. |
+| `OPENMAIL_PDF_MAX_PAGES` | PDF pages read for text: default 100, integer 1–2000. |
+| `OPENMAIL_PDF_TIMEOUT_MS` | PDF text extraction budget, including any wait for a free extraction slot: default 10000 ms, integer 1000–60000. |
 | `OPENMAIL_TRUST_PROXY` | `1` to trust `X-Forwarded-Proto` / `X-Forwarded-For`. |
 | `OPENMAIL_ALLOW_INSECURE_LOCALHOST` | `1` to allow plain IMAP to loopback (tests only). |
 | `OPENMAIL_INSECURE_IMAP_HOSTS` | Comma-separated exact hostnames allowed to use plain IMAP (operator-run internal servers only, e.g. `demo-mail`). |

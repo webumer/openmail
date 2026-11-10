@@ -29,7 +29,7 @@ const forbiddenImap: ImapGateway = {
 const smtp = { async verify() {}, async send(): Promise<never> { throw new Error("must not send mail"); } };
 
 describe("onboarding and MCP metrics", () => {
-  it("returns successful setup guidance for all six tools, preserving not_found for users with mailboxes", async () => {
+  it("returns successful setup guidance for all seven tools, preserving not_found for users with mailboxes", async () => {
     const metrics: Metric[] = [];
     let accounts: AccountSummary[] = [];
     const server = createMailMcpServer({ store: { listAccounts: async () => accounts, getAccount: async () => null },
@@ -44,6 +44,7 @@ describe("onboarding and MCP metrics", () => {
         ["search_messages", { account: "unknown" }, { messages: [], next_cursor: null }],
         ["read_message", { account: "unknown", folder: "INBOX", uid: 1 }, null],
         ["read_thread", { account: "unknown", folder: "INBOX", uid: 1 }, null],
+        ["get_attachment", { account: "unknown", folder: "INBOX", uid: 1, index: 0 }, null],
         ["send_message", { account: "unknown", to: ["fake@example.com"], body: "hello", user_confirmed: true }, { sent: false }],
       ] as const) {
         const result = await client.callTool({ name, arguments: args });
@@ -52,7 +53,7 @@ describe("onboarding and MCP metrics", () => {
         expect(JSON.stringify(result.content)).toContain("No mailbox is connected");
         if (name === "send_message") expect(JSON.stringify(result.content)).toContain("Nothing was sent");
       }
-      expect(metrics).toHaveLength(6);
+      expect(metrics).toHaveLength(7);
       expect(metrics.every((m) => m.kind === "tool_call" && m.outcome === "setup_required")).toBe(true);
       accounts = [{ id: "work", label: "work", email: "fake@example.com", preset: "migadu", imapHost: "imap.migadu.com", sendEnabled: false }];
       const result = await client.callTool({ name: "list_folders", arguments: { account: "unknown" } });

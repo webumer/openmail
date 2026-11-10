@@ -10,6 +10,7 @@ export { BODY_CHAR_CAP, THREAD_CHAR_CAP, UNTRUSTED_CONTENT_WARNING } from "./con
 export { encodeCursor, decodeCursor, type CursorPayload } from "./cursor.js";
 export { normalizeDate, type NormalizedDate } from "./dates.js";
 export { createImapGateway, type ImapGateway } from "./imap-gateway.js";
+export { getAttachment, type AttachmentData, type AttachmentDeps, type AttachmentKind, type AttachmentRequest } from "./get-attachment.js";
 export {
   listAccounts,
   listFolders,
@@ -38,7 +39,7 @@ export {
   type ZohoRegion,
 } from "./presets.js";
 export { ok, fail, type ToolFailure, type ToolResult, type ToolSuccess } from "./result.js";
-export { hasAttachments, type BodyNode } from "./structure.js";
+export { hasAttachments, listAttachments, type BodyNode, type ListedAttachment } from "./structure.js";
 export { allocateText, capText, htmlToText, selectMessageText } from "./text.js";
 export {
   buildImapConnectOptions,

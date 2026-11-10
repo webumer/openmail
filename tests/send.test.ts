@@ -50,6 +50,7 @@ function session(list: ListedMailbox[] = [folder("Sent", "\\Sent")]): ImapSessio
     search: async () => [],
     fetchOne: async () => null,
     fetchAll: async () => [],
+    fetchPart: async () => null,
   };
 }
 

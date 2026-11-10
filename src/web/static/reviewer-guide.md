@@ -1,6 +1,6 @@
 # OpenMail — reviewer testing guide
 
-OpenMail is a remote MCP server at `https://mcp.openmail.tools/mcp` (streamable HTTP). Five tools search and read mail and never mark it as read. `send_message` sends only when sending is turned on for that mailbox and the connection is allowed to send. The demo mailbox can send. Those messages stay on the isolated demo server and are not delivered to the internet.
+OpenMail is a remote MCP server at `https://mcp.openmail.tools/mcp` (streamable HTTP). Six tools search and read mail, including attachments, and never mark it as read. `send_message` sends only when sending is turned on for that mailbox and the connection is allowed to send. The demo mailbox can send. Those messages stay on the isolated demo server and are not delivered to the internet.
 
 - **Sign in with OpenMail (OAuth 2.1)** — for Claude, ChatGPT, Muse, MCP Inspector and other clients that implement MCP authorization. Add only the URL; no header or key.
 - **API key** — for Grok Bot and clients that send a fixed header: `Authorization: Bearer <key>`, created in the OpenMail dashboard.
@@ -34,6 +34,7 @@ Technical details: discovery via `/.well-known/oauth-protected-resource` (RFC 97
 | "Search for emails about invoices with attachments" | Matching messages only; attachments listed by name/size. |
 | "Read the newest unread email" | Full headers and text body. Afterwards the message is **still unread**. |
 | "Show me the whole thread for that email" | The conversation's messages in order. |
+| "Open the Northwind invoice PDF and tell me the total" | `get_attachment` returns the PDF text (USD 14.40) and 1 page. The message stays as it was (read or unread). |
 
 ## 3b. Testing send_message (optional)
 `send_message` is a sensitive write: the assistant asks for your approval every time.
@@ -61,6 +62,7 @@ Read tools: `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: tru
 | `search_messages` | Search messages | Read |
 | `read_message` | Read message | Read |
 | `read_thread` | Read thread | Read |
+| `get_attachment` | Get attachment | Read |
 | `send_message` | Send email | Sensitive write (asks for approval every time). Plain text, and only the recipients passed in. Needs `mail.send` or a *Read and send* key, and sending turned on for the mailbox. The demo mailbox can send; mail stays on the isolated demo server. |
 
 ## What it does not do
@@ -68,7 +70,7 @@ It does not delete, move, flag, or mark mail as read. It does not send from a ma
 
 ## Onboarding, slow servers and password reset
 
-Without a mailbox, all six tools return successful setup guidance with a dashboard link; sending says nothing was sent. Dashboard shows **Next step: add your mailbox**. OAuth consent reminds new users to add a mailbox after allowing access and still returns them to the assistant.
+Without a mailbox, all seven tools return successful setup guidance with a dashboard link; sending says nothing was sent. Dashboard shows **Next step: add your mailbox**. OAuth consent reminds new users to add a mailbox after allowing access and still returns them to the assistant.
 
 Test connection and Save verify IMAP and SMTP sign-in without sending or enabling sending. Provider hints and safe failure categories explain what to try. Search and thread reads return partial results and a warning after a default 25 s work budget; stalled connections close after 5 s grace. Search includes a cursor when possible.
 
