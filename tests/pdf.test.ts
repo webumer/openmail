@@ -13,11 +13,13 @@ import { flateBomb, simplePdf, textStream } from "./helpers/pdf.js";
 
 // With `swallowJob.on`, children forked by pdf.ts never get their job and idle until killed.
 const swallowJob = vi.hoisted(() => ({ on: false }));
+const forks = vi.hoisted(() => ({ count: 0 }));
 vi.mock("node:child_process", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:child_process")>();
   return {
     ...original,
     fork: (...args: Parameters<typeof original.fork>) => {
+      forks.count += 1;
       const child = original.fork(...args);
       if (swallowJob.on) {
         child.send = ((_message: unknown, callback?: (err: Error | null) => void) => {
@@ -256,6 +258,17 @@ describe("PDF child process", () => {
     // Two failed attempts, then the retry a second later succeeds.
     expect(attempts).toBe(3);
     expect(Date.now() - cancelled).toBeGreaterThanOrEqual(1_500);
+  });
+
+  it("rejects an already-cancelled call without starting a process", async () => {
+    const cancel = new AbortController();
+    cancel.abort();
+    const before = forks.count;
+    const run = startPdfChild(PDF, JOB, cancel.signal);
+    await expect(run.result).rejects.toMatchObject({ code: "cancelled" });
+    await run.exited;
+    expect(forks.count).toBe(before);
+    expect(run.pid).toBeUndefined();
   });
 
   it("kills every running child on killPdfChildren", async () => {

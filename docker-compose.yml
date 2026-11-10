@@ -48,7 +48,7 @@ services:
       - ALL
     # Kernel memory bound for the server and its PDF parser processes (~200 MB
     # normally). No swap. Parser processes set oom_score_adj=1000, so when the
-    # cgroup hits the limit the kernel kills a parser, not the server.
+    # cgroup hits the limit the kernel prefers to kill a parser over the server.
     mem_limit: 1536m
     memswap_limit: 1536m
 

@@ -227,6 +227,8 @@ export function startPdfChild(
   signal: AbortSignal,
   childOptions: ChildOptions = {},
 ): PdfRun {
+  // Before forking: a child that is never started cannot emit an unhandled "error".
+  if (signal.aborted) return { result: Promise.reject(cancelledError()), exited: Promise.resolve() };
   const rssLimit = childOptions.rssLimitBytes ?? CHILD_RSS_LIMIT_BYTES;
   const entry = pdfChildEntry();
   const nodeArgs = [...entry.execArgv, `--max-old-space-size=${childOptions.heapMb ?? CHILD_HEAP_MB}`, "--max-semi-space-size=16"];
@@ -304,10 +306,6 @@ export function startPdfChild(
     }, RSS_POLL_MS);
     const onAbort = () => finish(() => reject(cancelledError()));
     signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) {
-      onAbort();
-      return;
-    }
     child.once("message", (message: unknown) => {
       const reply = message as { ok: true; pages: number; pagesRead: number; text: string; chars: number } | { ok: false; kind: string };
       finish(() => {
