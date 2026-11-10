@@ -14,7 +14,7 @@
 - Error code `too_large` when a server sends more than the cap; metric outcome of the same name.
 
 ### PDF library choice
-PDF text uses [unpdf](https://github.com/unjs/unpdf) 2.x (MIT, UnJS). It ships a serverless build of Mozilla pdf.js with no runtime dependencies and no native modules; its canvas peer is optional and only needed for rendering, which OpenMail does not do. `pdfjs-dist` directly was the alternative, but it pulls in an optional native canvas package and its Node legacy build needs more setup. `pdf-parse` wraps an old pdf.js release.
+PDF text uses [unpdf](https://github.com/unjs/unpdf) 1.9 (MIT, UnJS). The 1.x line is used because unpdf 2.x requires Node 24, and OpenMail supports Node 22. It ships a serverless build of Mozilla pdf.js with no runtime dependencies and no native modules; its canvas peer is optional and only needed for rendering, which OpenMail does not do. `pdfjs-dist` directly was the alternative, but it pulls in an optional native canvas package and its Node legacy build needs more setup. `pdf-parse` wraps an old pdf.js release.
 
 Guards around it: the decoded byte cap applies before parsing; extraction runs in a worker thread with eval and font loading off and a 256 MB heap; the worker is terminated at the timeout; at most two extractions run at once; pages past the page limit are skipped. A broken, password-protected, oversized or slow PDF returns `parse_error`, not a crash.
 
