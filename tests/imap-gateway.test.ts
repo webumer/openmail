@@ -36,7 +36,7 @@ describe("imap gateway", () => {
       ],
     };
     const gateway = createImapGateway(() => client, { resolve: publicDns });
-    const result = await getAttachment({ ...deps(gateway), attachmentLimits: { maxBytes: 64 * 1024, pdfMaxPages: 1, pdfTimeoutMs: 1_000 } },
+    const result = await getAttachment({ ...deps(gateway), attachmentLimits: { maxBytes: 64 * 1024, base64MaxBytes: 64 * 1024, pdfMaxPages: 1, pdfTimeoutMs: 1_000 } },
       "user-1", "work", "INBOX", 9, { part: "2" });
     expect(result).toMatchObject({ ok: true, data: { text: "hello", index: 0, filename: "a.txt" } });
     expect(client.calls.find((call) => call.method === "getMailboxLock")?.args).toEqual(["INBOX", { readOnly: true }]);

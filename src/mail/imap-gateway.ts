@@ -10,6 +10,7 @@ import {
   type StatusObject,
 } from "imapflow";
 import { imapTimeoutFromEnv } from "../config/runtime.js";
+import { MESSAGE_SOURCE_CAP_BYTES } from "./constants.js";
 import { createDeadline, type Deadline } from "./deadline.js";
 import type { AccountCredentials } from "../store/types.js";
 import { MailError, toMailError } from "../errors.js";
@@ -25,10 +26,30 @@ import type {
   MessageFetchQuery,
 } from "./session.js";
 
+/**
+ * Receive limits for one connection, enforced by imapflow's parser while the
+ * response is read: a literal or response over the limit fails the connection
+ * before its bytes are buffered, and the call rejects with `too_large`.
+ */
+export interface ImapReceiveLimits {
+  /** Largest single literal (for example one body part) the server may send. */
+  maxLiteralBytes: number;
+}
+
+/**
+ * Default receive limits. The largest legitimate literal elsewhere is a
+ * read_message source, which is requested as BODY.PEEK[]<0.10 MB>; a server
+ * that ignores the range cannot make the connection buffer more than this.
+ */
+export const DEFAULT_MAX_LITERAL_BYTES = MESSAGE_SOURCE_CAP_BYTES + 1024 * 1024;
+/** Room for the rest of one response (framing, other fetch items, long SEARCH lines). */
+const RESPONSE_HEADROOM_BYTES = 16 * 1024 * 1024;
+const LIMIT_ERROR_CODES = new Set(["LiteralTooLarge", "ResponseTooLarge", "LineTooLarge", "TooManyTokens"]);
+
 export interface ImapGateway {
   withClient<T>(account: AccountCredentials, fn: (session: ImapSession) => Promise<T>): Promise<T>;
   /** Opens the mailbox with EXAMINE (`readOnly: true`) and releases the lock afterwards. */
-  withMailbox<T>(account: AccountCredentials, folder: string, fn: (session: ImapSession) => Promise<T>): Promise<T>;
+  withMailbox<T>(account: AccountCredentials, folder: string, fn: (session: ImapSession) => Promise<T>, limits?: ImapReceiveLimits): Promise<T>;
   /**
    * APPEND one message. Does not SELECT or EXAMINE any mailbox, so it cannot
    * change flags on mail that is already there. This is the only IMAP write.
@@ -44,6 +65,8 @@ interface ImapClient {
   connect(): Promise<void>;
   logout(): Promise<void>;
   close(): void;
+  /** imapflow emits terminal parser errors (such as LiteralTooLarge) here. */
+  on?(event: "error", listener: (err: unknown) => void): unknown;
   capabilities: Map<string, boolean | number>;
   list(options?: { statusQuery?: { messages?: boolean; unseen?: boolean } }): Promise<ListResponse[]>;
   status(path: string, query: { messages?: boolean; unseen?: boolean }): Promise<StatusObject | false>;
@@ -81,7 +104,7 @@ export function createImapGateway(
     withClient(account, fn) {
       return run(factory, resolve, timeoutMs, graceMs, account, async (session) => fn(session));
     },
-    withMailbox(account, folder, fn) {
+    withMailbox(account, folder, fn, limits) {
       return run(factory, resolve, timeoutMs, graceMs, account, async (session, client) => {
         const lock = await client.getMailboxLock(folder, { readOnly: true });
         try {
@@ -89,7 +112,7 @@ export function createImapGateway(
         } finally {
           lock.release();
         }
-      });
+      }, limits);
     },
     appendMessage(account, folder, raw, flags) {
       return run(factory, resolve, timeoutMs, graceMs, account, async (_session, client) => {
@@ -113,6 +136,7 @@ async function run<T>(
   graceMs: number,
   account: AccountCredentials,
   fn: (session: ImapSession, client: ImapClient) => Promise<T>,
+  limits: ImapReceiveLimits = { maxLiteralBytes: DEFAULT_MAX_LITERAL_BYTES },
 ): Promise<T> {
   const deadline = createDeadline({ timeoutMs });
   let client: ImapClient | undefined;
@@ -124,6 +148,7 @@ async function run<T>(
     }
   };
   let timedOut = false;
+  let overLimit = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = () => new MailError("timeout", "The mail server took too long. Try a narrower search or try again later.", "timeout");
   const work = async (): Promise<T> => {
@@ -133,12 +158,20 @@ async function run<T>(
       if (timedOut) throw timeout();
       options.host = target.host;
       if (target.servername) options.servername = target.servername;
+      options.maxLiteralSize = limits.maxLiteralBytes;
+      options.maxResponseSize = limits.maxLiteralBytes + RESPONSE_HEADROOM_BYTES;
       client = factory(options);
+      client.on?.("error", (err) => {
+        if (isLimitError(err)) overLimit = true;
+      });
       await client.connect();
       if (timedOut) throw timeout();
       return await fn(createSession(client, deadline), client);
     } catch (err) {
       close();
+      if (overLimit || isLimitError(err)) {
+        throw new MailError("too_large", "The mail server sent more data than the size limit allows, so the download was stopped.");
+      }
       throw toMailError(err, account.password);
     } finally {
       if (client && !closed) {
@@ -171,6 +204,11 @@ async function run<T>(
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+function isLimitError(err: unknown): boolean {
+  const code = err && typeof err === "object" ? (err as { code?: unknown }).code : undefined;
+  return typeof code === "string" && LIMIT_ERROR_CODES.has(code);
 }
 
 function safeClose(client: ImapClient): void {

@@ -266,7 +266,7 @@ export function privacyPage(options: { csrf?: string } = {}): string {
 <ul>
 <li>For each mailbox: its name, address, provider preset, IMAP server name and an internal account ID.</li>
 <li>For each message: sender and recipient names and addresses, subject, date, message ID, read and flag status, size, the message text, and attachment names, types and sizes.</li>
-<li>When the assistant asks for one attachment: its text (for PDFs, text, CSV, HTML, JSON and XML files) or, only if it asks, the file itself up to 10 MB. Only that attachment is downloaded from your provider; it is not saved.</li>
+<li>When the assistant asks for one attachment: its text (for PDFs, text, CSV, HTML, JSON and XML files) or, only if it asks, the file itself up to 5 MB. Only that attachment is downloaded from your provider; it is not saved.</li>
 <li>Folder names with message and unread counts.</li>
 </ul>
 <p>Nothing else about you is returned. Mailbox passwords and your OpenMail password are never returned.</p>

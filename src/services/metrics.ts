@@ -7,7 +7,7 @@ export type MetricKind = (typeof METRIC_KINDS)[number];
 export const TOOL_NAMES = ["list_accounts", "list_folders", "search_messages", "read_message", "read_thread", "get_attachment", "send_message"] as const;
 const TOOL_OUTCOMES = ["ok", "setup_required", "imap_error", "smtp_error", "timeout", "not_found", "rate_limited",
   "invalid_argument", "invalid_input", "invalid_cursor", "config_error", "send_not_permitted", "sending_disabled",
-  "insecure_transport", "blocked_host", "parse_error", "missing_secret", "limit_reached", "conflict", "too_large", "internal_error", "unknown_error"];
+  "insecure_transport", "blocked_host", "parse_error", "missing_secret", "limit_reached", "conflict", "too_large", "cancelled", "internal_error", "unknown_error"];
 const BUCKETS = ["<1s", "1-5s", "5-15s", "15-30s", ">30s"];
 
 export interface Metric {

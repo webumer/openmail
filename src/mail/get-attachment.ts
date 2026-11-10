@@ -3,15 +3,17 @@ import { MailError } from "../errors.js";
 import { ATTACHMENT_CHAR_CAP, UNTRUSTED_CONTENT_WARNING } from "./constants.js";
 import { decodeCharset, decodeTransfer } from "./decode.js";
 import { guard, parseSource, requireAccount, requireFolder, requireUid, type MailDeps } from "./operations.js";
-import { extractPdfText } from "./pdf.js";
+import { defaultPdfPool, type PdfPool, type PdfTicket } from "./pdf.js";
 import { ok, type ToolResult } from "./result.js";
 import type { MessageFetchQuery } from "./session.js";
-import { baseType, estimatedSize, findPart, listAttachmentParts, type BodyNode } from "./structure.js";
+import { baseType, estimatedSize, findPart, isSinglePart, listAttachmentParts, type BodyNode } from "./structure.js";
 import { capText, htmlToText } from "./text.js";
 
 export interface AttachmentDeps extends MailDeps {
-  /** Defaults to OPENMAIL_ATTACHMENT_MAX_BYTES / OPENMAIL_PDF_MAX_PAGES / OPENMAIL_PDF_TIMEOUT_MS. */
+  /** Defaults to the OPENMAIL_ATTACHMENT_* and OPENMAIL_PDF_* environment settings. */
   attachmentLimits?: AttachmentLimits;
+  /** Shared PDF extraction pool; tests inject their own. */
+  pdfPool?: PdfPool;
 }
 
 export interface AttachmentRequest {
@@ -19,8 +21,13 @@ export interface AttachmentRequest {
   index?: number;
   /** IMAP body part number from read_message. */
   part?: string;
-  /** Return the decoded bytes as base64 when they fit the size cap. */
+  /** Return the decoded bytes as base64 when they fit the base64 size cap. */
   include_base64?: boolean;
+}
+
+export interface AttachmentCallOptions {
+  /** Aborts PDF extraction (queued or running) when the client cancels the call. */
+  signal?: AbortSignal;
 }
 
 export type AttachmentKind = "text" | "pdf" | "email" | "binary";
@@ -70,7 +77,10 @@ interface Target {
 interface Downloaded {
   target: Target;
   bytes: Buffer | null;
-  tooLarge: boolean;
+  /** Set when the part was not downloaded because it is over this decoded-size cap. */
+  overCap: number | null;
+  /** Held from before the download until the PDF has been read. */
+  ticket: PdfTicket | null;
 }
 
 export async function getAttachment(
@@ -80,30 +90,50 @@ export async function getAttachment(
   folder: string,
   uid: number,
   request: AttachmentRequest,
+  options: AttachmentCallOptions = {},
 ): Promise<ToolResult<AttachmentData>> {
   return guard(async () => {
     const path = requireFolder(folder);
     requireUid(uid);
     validateSelector(request);
     const limits = deps.attachmentLimits ?? attachmentLimitsFromEnv();
+    const pool = deps.pdfPool ?? defaultPdfPool;
     const account = await requireAccount(deps.store, userId, accountId);
-    const downloaded = await deps.imap.withMailbox(account, path, async (session): Promise<Downloaded> => {
-      const message = await session.fetchOne(uid, BODYSTRUCTURE_FETCH);
-      if (!message) throw new MailError("not_found", `Message ${uid} was not found in ${path}`);
-      const target = resolveTarget(message.bodyStructure, request);
-      const kind = classify(target.node, target.filename);
-      if (kind === "binary" && request.include_base64 !== true) return { target, bytes: null, tooLarge: false };
-      const estimate = estimatedSize(target.node);
-      if (estimate !== null && estimate > limits.maxBytes) return { target, bytes: null, tooLarge: true };
-      const encodedLimit = encodedCap(limits.maxBytes, target.node.encoding);
-      const raw = await session.fetchPart(uid, target.section, encodedLimit + 1);
-      if (!raw) throw new MailError("not_found", `Part ${target.part} of message ${uid} could not be fetched`);
-      if (raw.length > encodedLimit) throw tooLargeError(limits.maxBytes);
-      const bytes = decodeTransfer(raw, target.node.encoding);
-      if (bytes.length > limits.maxBytes) throw tooLargeError(limits.maxBytes);
-      return { target, bytes, tooLarge: false };
-    });
-    return describe(downloaded, path, uid, request, limits);
+    let ticket: PdfTicket | null = null;
+    let finished = false;
+    try {
+      const downloaded = await deps.imap.withMailbox(account, path, async (session): Promise<Downloaded> => {
+        const message = await session.fetchOne(uid, BODYSTRUCTURE_FETCH);
+        if (!message) throw new MailError("not_found", `Message ${uid} was not found in ${path}`);
+        const target = resolveTarget(message.bodyStructure, request);
+        const kind = classify(target.node, target.filename);
+        const wantsBase64 = request.include_base64 === true;
+        if (kind === "binary" && !wantsBase64) return { target, bytes: null, overCap: null, ticket: null };
+        // Binary parts are downloaded only to return base64, so the smaller base64 cap applies.
+        const cap = kind === "binary" ? limits.base64MaxBytes : limits.maxBytes;
+        const wireLimit = encodedCap(cap, target.node.encoding);
+        // The BODYSTRUCTURE size is of the encoded part: only skip the download when even the
+        // most compact encoding of `cap` bytes would be smaller.
+        if (typeof target.node.size === "number" && target.node.size > wireLimit) return { target, bytes: null, overCap: cap, ticket: null };
+        if (kind === "pdf") {
+          // A call that already returned (hard IMAP timeout) must not take a place it would never release.
+          if (finished) throw new MailError("timeout", "The mail server took too long.");
+          // Take a place before downloading, so waiting PDFs and their bytes stay bounded.
+          ticket = pool.admit(Math.min(estimatedSize(target.node) ?? cap, cap));
+        }
+        const raw = await session.fetchPart(uid, target.section, wireLimit + 1);
+        if (!raw) throw new MailError("not_found", `Part ${target.part} of message ${uid} could not be fetched`);
+        if (raw.length > wireLimit) throw tooLargeError(cap);
+        const bytes = decodeTransfer(raw, target.node.encoding);
+        if (bytes.length > cap) throw tooLargeError(cap);
+        ticket?.resize(bytes.length);
+        return { target, bytes, overCap: null, ticket };
+      }, { maxLiteralBytes: encodedCap(Math.max(limits.maxBytes, limits.base64MaxBytes), "quoted-printable") + 1 });
+      return await describe(downloaded, path, uid, request, limits, options.signal);
+    } finally {
+      finished = true;
+      (ticket as PdfTicket | null)?.release();
+    }
   });
 }
 
@@ -122,7 +152,7 @@ function validateSelector(request: AttachmentRequest): void {
 function resolveTarget(root: BodyNode | null, request: AttachmentRequest): Target {
   if (!root) throw new MailError("not_found", "The message structure is unavailable");
   const listed = listAttachmentParts(root);
-  const singlePart = !root.childNodes?.length;
+  const singlePart = isSinglePart(root);
   const sectionOf = (part: string) => (singlePart && part === "1" ? "TEXT" : part);
   if (request.index !== undefined) {
     const item = listed[request.index];
@@ -169,11 +199,17 @@ function isHtml(type: string, filename: string | null): boolean {
   return type === "text/html" || type === "application/xhtml+xml" || (GENERIC_TYPES.has(type) && HTML_EXTENSIONS.test(filename ?? ""));
 }
 
-/** Most encoded bytes that can decode to `maxBytes`. */
-function encodedCap(maxBytes: number, encoding: string | null | undefined): number {
+/**
+ * Wire budget: the most encoded bytes that can still decode to at most
+ * `maxBytes`. Base64 carries 3 bytes per 4 characters plus CRLF per 76;
+ * quoted-printable at worst escapes every byte (=XX) with a soft line break
+ * per 25 escapes (76 characters + CRLF). The decoded size is checked
+ * separately after decoding.
+ */
+export function encodedCap(maxBytes: number, encoding: string | null | undefined): number {
   const value = (encoding ?? "").toLowerCase();
   if (value === "base64") return Math.ceil((maxBytes * 4) / 3 * 78 / 76) + 4_096;
-  if (value === "quoted-printable") return maxBytes * 3;
+  if (value === "quoted-printable") return Math.ceil((maxBytes * 78) / 25) + 4_096;
   return maxBytes;
 }
 
@@ -192,6 +228,7 @@ async function describe(
   uid: number,
   request: AttachmentRequest,
   limits: AttachmentLimits,
+  signal: AbortSignal | undefined,
 ): Promise<ToolResult<AttachmentData>> {
   const { target, bytes } = downloaded;
   const node = target.node;
@@ -219,12 +256,13 @@ async function describe(
     message: null,
   };
 
-  if (downloaded.tooLarge) {
-    data.message = `The attachment is about ${formatBytes(data.size ?? 0)}, over the ${formatBytes(limits.maxBytes)} limit, so it was not downloaded. Only its details are shown.`;
+  if (downloaded.overCap !== null) {
+    const what = request.include_base64 === true && kind === "binary" ? "base64 limit" : "limit";
+    data.message = `The attachment is about ${formatBytes(data.size ?? 0)}, over the ${formatBytes(downloaded.overCap)} ${what}, so it was not downloaded. Only its details are shown.`;
     return ok(data, { warnings });
   }
   if (!bytes) {
-    data.message = `${contentType} files are not converted to text. Call get_attachment again with include_base64=true to get the file as base64 (up to ${formatBytes(limits.maxBytes)}).`;
+    data.message = `${contentType} files are not converted to text. Call get_attachment again with include_base64=true to get the file as base64 (up to ${formatBytes(limits.base64MaxBytes)}).`;
     return ok(data, { warnings });
   }
 
@@ -253,11 +291,11 @@ async function describe(
       setText(decoded.text);
     }
   } else if (kind === "pdf") {
-    const pdf = await extractPdfText(new Uint8Array(bytes), {
+    const pdf = await downloaded.ticket!.extract(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.length), {
       maxPages: limits.pdfMaxPages,
       timeoutMs: limits.pdfTimeoutMs,
       maxChars: ATTACHMENT_CHAR_CAP,
-    });
+    }, signal);
     data.pages = pdf.pages;
     data.pages_read = pdf.pagesRead;
     setText(pdf.text, pdf.chars);
@@ -273,6 +311,9 @@ async function describe(
     setText(`${header}\n\n${parsed.text}`);
   }
 
-  if (request.include_base64 === true) data.base64 = bytes.toString("base64");
+  if (request.include_base64 === true) {
+    if (bytes.length <= limits.base64MaxBytes) data.base64 = bytes.toString("base64");
+    else warnings.push(`base64 is not included: the attachment is ${formatBytes(bytes.length)}, over the ${formatBytes(limits.base64MaxBytes)} base64 limit.`);
+  }
   return ok(data, { truncated, warnings });
 }

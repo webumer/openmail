@@ -3,29 +3,35 @@ import { attachmentLimitsFromEnv, type AttachmentLimits } from "../src/config/ru
 import { invoicePdf } from "../src/demo/messages.js";
 import { ATTACHMENT_CHAR_CAP, UNTRUSTED_CONTENT_WARNING } from "../src/mail/constants.js";
 import { decodeCharset, decodeTransfer } from "../src/mail/decode.js";
-import { classify, getAttachment, type AttachmentRequest } from "../src/mail/get-attachment.js";
-import type { ImapGateway } from "../src/mail/imap-gateway.js";
+import { classify, encodedCap, getAttachment, type AttachmentRequest } from "../src/mail/get-attachment.js";
+import type { ImapGateway, ImapReceiveLimits } from "../src/mail/imap-gateway.js";
+import type { PdfPool } from "../src/mail/pdf.js";
 import { readMessage } from "../src/mail/operations.js";
 import { findPart, listAttachmentParts, listAttachments, type BodyNode } from "../src/mail/structure.js";
 import type { CredentialStore } from "../src/store/types.js";
 import { RecordingSession, account, fetched } from "./fixtures.js";
+import { simplePdf, textStream } from "./helpers/pdf.js";
 
-const LIMITS: AttachmentLimits = { maxBytes: 1024 * 1024, pdfMaxPages: 100, pdfTimeoutMs: 10_000 };
+const LIMITS: AttachmentLimits = { maxBytes: 1024 * 1024, base64MaxBytes: 1024 * 1024, pdfMaxPages: 100, pdfTimeoutMs: 10_000 };
 
-function harness(limits: AttachmentLimits = LIMITS) {
+function harness(limits: AttachmentLimits = LIMITS, pdfPool?: PdfPool) {
   const session = new RecordingSession();
+  const receiveLimits: (ImapReceiveLimits | undefined)[] = [];
   const imap: ImapGateway = {
     async withClient(_account, fn) { return fn(session); },
-    async withMailbox(_account, _folder, fn) { return fn(session); },
+    async withMailbox(_account, _folder, fn, limits) {
+      receiveLimits.push(limits);
+      return fn(session);
+    },
     async appendMessage() { throw new Error("must not append"); },
   };
   const store: CredentialStore = {
     async listAccounts() { return []; },
     async getAccount(_user, id) { return id === account.id ? account : null; },
   };
-  const deps = { store, imap, attachmentLimits: limits };
+  const deps = { store, imap, attachmentLimits: limits, ...(pdfPool ? { pdfPool } : {}) };
   const get = (request: AttachmentRequest, uid = 7) => getAttachment(deps, "user-1", "work", "INBOX", uid, request);
-  return { session, deps, get };
+  return { session, deps, get, receiveLimits };
 }
 
 /** multipart/mixed: 1 text body, then the given attachment parts as 2, 3, ... */
@@ -47,33 +53,6 @@ function base64Lines(bytes: Buffer): Buffer {
 function seed(session: RecordingSession, root: BodyNode, parts: Record<string, Buffer>, uid = 7) {
   session.messages.set(uid, fetched({ uid, bodyStructure: root, flags: [] }));
   for (const [section, raw] of Object.entries(parts)) session.parts.set(`${uid}:${section}`, raw);
-}
-
-/** A tiny valid PDF with one line of text per page. */
-function simplePdf(pages: string[]): Buffer {
-  const objects = ["<< /Type /Catalog /Pages 2 0 R >>", ""];
-  const kids: string[] = [];
-  for (const line of pages) {
-    const pageObj = objects.length + 1;
-    const content = `BT /F1 12 Tf 56 760 Td (${line}) Tj ET`;
-    objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${pageObj + 1} 0 R /Resources << /Font << /F1 FONT 0 R >> >> >>`);
-    objects.push(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
-    kids.push(`${pageObj} 0 R`);
-  }
-  const font = objects.length + 1;
-  objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
-  objects[1] = `<< /Type /Pages /Kids [${kids.join(" ")}] /Count ${pages.length} >>`;
-  let pdf = "%PDF-1.4\n";
-  const offsets: number[] = [];
-  objects.forEach((body, i) => {
-    offsets.push(Buffer.byteLength(pdf));
-    pdf += `${i + 1} 0 obj\n${body.replace("FONT", String(font))}\nendobj\n`;
-  });
-  const xref = Buffer.byteLength(pdf);
-  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
-  for (const offset of offsets) pdf += `${String(offset).padStart(10, "0")} 00000 n \n`;
-  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
-  return Buffer.from(pdf, "latin1");
 }
 
 describe("attachment structure", () => {
@@ -154,9 +133,11 @@ describe("part decoding", () => {
   });
 
   it("reads attachment limits from the environment", () => {
-    expect(attachmentLimitsFromEnv({})).toEqual({ maxBytes: 10 * 1024 * 1024, pdfMaxPages: 100, pdfTimeoutMs: 10_000 });
+    expect(attachmentLimitsFromEnv({})).toEqual({ maxBytes: 10 * 1024 * 1024, base64MaxBytes: 5 * 1024 * 1024, pdfMaxPages: 100, pdfTimeoutMs: 10_000 });
     expect(attachmentLimitsFromEnv({ OPENMAIL_ATTACHMENT_MAX_BYTES: "2097152", OPENMAIL_PDF_MAX_PAGES: "5", OPENMAIL_PDF_TIMEOUT_MS: "3000" }))
-      .toEqual({ maxBytes: 2_097_152, pdfMaxPages: 5, pdfTimeoutMs: 3_000 });
+      .toEqual({ maxBytes: 2_097_152, base64MaxBytes: 2_097_152, pdfMaxPages: 5, pdfTimeoutMs: 3_000 });
+    expect(attachmentLimitsFromEnv({ OPENMAIL_ATTACHMENT_BASE64_MAX_BYTES: "1048576" }).base64MaxBytes).toBe(1_048_576);
+    expect(() => attachmentLimitsFromEnv({ OPENMAIL_ATTACHMENT_BASE64_MAX_BYTES: "10" })).toThrow(/OPENMAIL_ATTACHMENT_BASE64_MAX_BYTES/);
     expect(() => attachmentLimitsFromEnv({ OPENMAIL_ATTACHMENT_MAX_BYTES: "1" })).toThrow(/OPENMAIL_ATTACHMENT_MAX_BYTES/);
     expect(() => attachmentLimitsFromEnv({ OPENMAIL_PDF_MAX_PAGES: "x" })).toThrow(/OPENMAIL_PDF_MAX_PAGES/);
   });
@@ -176,7 +157,7 @@ describe("get_attachment", () => {
     });
     expect(result.warnings).toContain(UNTRUSTED_CONTENT_WARNING);
     expect(session.fetches).toEqual([{ bodyStructure: true, size: true }]);
-    expect(session.partFetches).toEqual([{ uid: 7, section: "2", maxBytes: LIMITS.maxBytes * 3 + 1 }]);
+    expect(session.partFetches).toEqual([{ uid: 7, section: "2", maxBytes: encodedCap(LIMITS.maxBytes, "quoted-printable") + 1 }]);
   });
 
   it("converts HTML like message bodies and caps long text with the total length", async () => {
@@ -232,7 +213,7 @@ describe("get_attachment", () => {
     const slow = harness({ ...LIMITS, pdfTimeoutMs: 1 });
     seed(slow.session, mixed(attachment("application/pdf", "a.pdf")), { "2": base64Lines(invoicePdf()) });
     const timedOut = await slow.get({ index: 0 });
-    expect(timedOut).toMatchObject({ ok: false, error: { code: "parse_error", message: expect.stringContaining("took longer") } });
+    expect(timedOut).toMatchObject({ ok: false, error: { code: "parse_error", message: expect.stringContaining("took too long") } });
   });
 
   it("returns metadata for other files, and base64 only on request within the cap", async () => {
@@ -292,5 +273,134 @@ describe("get_attachment", () => {
     expect(await get({ index: 0 })).toMatchObject({ ok: false, error: { code: "not_found", message: expect.stringContaining("could not be fetched") } });
     const body = await get({ part: "1" });
     expect(body).toMatchObject({ ok: false, error: { code: "not_found" } });
+  });
+});
+
+/** Quoted-printable with every byte escaped and a soft line break after each 25 escapes: the worst case, ~3.12x. */
+function escapedQp(bytes: Buffer): Buffer {
+  const lines: string[] = [];
+  for (let i = 0; i < bytes.length; i += 25) {
+    lines.push([...bytes.subarray(i, i + 25)].map((b) => `=${b.toString(16).toUpperCase().padStart(2, "0")}`).join(""));
+  }
+  return Buffer.from(lines.join("=\r\n"));
+}
+
+describe("get_attachment size budgets", () => {
+  it("reads heavily escaped quoted-printable whose decoded size is under the cap, even though its encoded size is over it", async () => {
+    const { session, get } = harness({ ...LIMITS, maxBytes: 64 * 1024 });
+    const decoded = Buffer.alloc(63 * 1024, 0xe9);
+    const raw = escapedQp(decoded);
+    expect(raw.length).toBeGreaterThan(3 * 64 * 1024);
+    seed(session, mixed(attachment("text/plain", "accents.txt", { encoding: "quoted-printable", parameters: { charset: "iso-8859-1" }, size: raw.length })), { "2": raw });
+    const result = await get({ index: 0 });
+    expect(result).toMatchObject({ ok: true, data: { size: decoded.length, text_length: decoded.length } });
+    expect(session.partFetches).toEqual([{ uid: 7, section: "2", maxBytes: encodedCap(64 * 1024, "quoted-printable") + 1 }]);
+  });
+
+  it("enforces the decoded cap separately from the wire budget", async () => {
+    const { session, get } = harness({ ...LIMITS, maxBytes: 64 * 1024 });
+    // Plain ASCII in quoted-printable decodes 1:1, so 100 KB fits the wire budget but not the 64 KB cap.
+    const raw = Buffer.alloc(100 * 1024, 0x61);
+    seed(session, mixed(attachment("text/plain", "big.txt", { encoding: "quoted-printable", size: raw.length })), { "2": raw });
+    expect(await get({ index: 0 })).toMatchObject({ ok: false, error: { code: "too_large" } });
+    // Over the wire budget: not downloaded at all.
+    seed(session, mixed(attachment("text/plain", "huge.txt", { encoding: "quoted-printable", size: encodedCap(64 * 1024, "quoted-printable") + 1 })), {}, 8);
+    expect(await get({ index: 0 }, 8)).toMatchObject({ ok: true, data: { message: expect.stringContaining("not downloaded") } });
+    expect(session.partFetches).toHaveLength(1);
+  });
+
+  it("asks the gateway for a receive limit that covers the worst-case wire budget", async () => {
+    const { session, get, receiveLimits } = harness({ ...LIMITS, maxBytes: 64 * 1024, base64MaxBytes: 64 * 1024 });
+    seed(session, mixed(attachment("text/plain", "a.txt", { encoding: "7bit", size: 5 })), { "2": Buffer.from("hello") });
+    await get({ index: 0 });
+    expect(receiveLimits).toEqual([{ maxLiteralBytes: encodedCap(64 * 1024, "quoted-printable") + 1 }]);
+  });
+
+  it("applies the smaller base64 cap: binaries over it are not downloaded, text over it keeps its text without base64", async () => {
+    const { session, get } = harness({ ...LIMITS, maxBytes: 256 * 1024, base64MaxBytes: 64 * 1024 });
+    const zip = Buffer.alloc(100 * 1024, 7);
+    const text = Buffer.alloc(100 * 1024, 0x62);
+    seed(session, mixed(
+      attachment("application/zip", "a.zip", { size: base64Lines(zip).length }),
+      attachment("text/plain", "b.txt", { size: base64Lines(text).length }),
+      attachment("application/zip", "small.zip", { size: 12 }),
+    ), { "2": base64Lines(zip), "3": base64Lines(text), "4": base64Lines(Buffer.from("tiny")) });
+    const binary = await get({ index: 0, include_base64: true });
+    expect(binary).toMatchObject({ ok: true, data: { base64: null, message: expect.stringContaining("64 KB base64 limit") } });
+    expect(session.partFetches).toEqual([]);
+    const textual = await get({ index: 1, include_base64: true });
+    expect(textual).toMatchObject({ ok: true, data: { base64: null, text_length: text.length } });
+    expect(textual.warnings.some((w) => w.includes("base64 is not included"))).toBe(true);
+    const small = await get({ index: 2, include_base64: true });
+    expect(small.ok && small.data.base64).toBe(Buffer.from("tiny").toString("base64"));
+  });
+});
+
+describe("attachment matching", () => {
+  const named = (part: string, type: string, filename: string | null, extra: Partial<BodyNode> = {}): BodyNode =>
+    ({ type, part, disposition: "attachment", ...(filename ? { dispositionParameters: { filename } } : {}), encoding: "base64", size: 780, ...extra });
+  const info = (filename: string | null, content_type: string, size: number, content_id: string | null = null) => ({ filename, content_type, size, content_id });
+
+  it("never gives a part another attachment's name when names disagree", () => {
+    const root = mixed(named("2", "text/plain", "y.txt"));
+    expect(listAttachments([info("x.txt", "text/plain", 5)], root)).toEqual([
+      { index: 0, part: "2", filename: "y.txt", content_type: "text/plain", size: 570, content_id: null },
+      { index: null, part: null, filename: "x.txt", content_type: "text/plain", size: 5, content_id: null },
+    ]);
+  });
+
+  it("does not let a named inline text part (not in BODYSTRUCTURE's list) take a later attachment's index", () => {
+    const root: BodyNode = {
+      type: "multipart/mixed",
+      childNodes: [
+        { type: "text/plain", part: "1", size: 10 },
+        { type: "text/plain", part: "2", disposition: "inline", dispositionParameters: { filename: "notes.txt" }, size: 40 },
+        named("3", "text/plain", "report.txt"),
+      ],
+    };
+    const listed = listAttachments([info("notes.txt", "text/plain", 40), info("report.txt", "text/plain", 500)], root);
+    expect(listed[0]).toEqual({ index: 0, part: "3", filename: "report.txt", content_type: "text/plain", size: 500, content_id: null });
+    expect(listed[1]).toMatchObject({ index: null, part: null, filename: "notes.txt" });
+  });
+
+  it("matches by Content-ID first and never across conflicting Content-IDs", () => {
+    const root = mixed(named("2", "image/png", null, { id: "<b@x>", disposition: "inline" }), named("3", "image/png", null, { id: "<a@x>", disposition: "inline" }));
+    const listed = listAttachments([info(null, "image/png", 1, "a@x"), info(null, "image/png", 2, "b@x")], root);
+    expect(listed.map((a) => [a.index, a.part, a.size, a.content_id])).toEqual([[0, "2", 2, "b@x"], [1, "3", 1, "a@x"]]);
+    const conflicting = listAttachments([info(null, "image/png", 1, "z@x")], mixed(named("2", "image/png", null, { id: "<b@x>" })));
+    expect(conflicting.map((a) => a.index)).toEqual([0, null]);
+    expect(conflicting[0]).toMatchObject({ size: 570, content_id: "b@x" });
+  });
+
+  it("pairs duplicate names and unnamed parts in order, but only when the counts agree", () => {
+    const twice = mixed(named("2", "image/png", "scan.png"), named("3", "image/png", "scan.png"));
+    expect(listAttachments([info("scan.png", "image/png", 1), info("scan.png", "image/png", 2)], twice).map((a) => [a.part, a.size])).toEqual([["2", 1], ["3", 2]]);
+    const unnamed = mixed(named("2", "application/octet-stream", null), named("3", "application/octet-stream", null));
+    expect(listAttachments([info(null, "application/octet-stream", 1), info(null, "application/octet-stream", 2)], unnamed).map((a) => [a.part, a.size]))
+      .toEqual([["2", 1], ["3", 2]]);
+    // Three parsed, two parts: which one is missing is unknown, so none of them is matched.
+    const listed = listAttachments([1, 2, 3].map((n) => info(null, "application/octet-stream", n)), unnamed);
+    expect(listed.map((a) => [a.index, a.size])).toEqual([[0, 570], [1, 570], [null, 1], [null, 2], [null, 3]]);
+  });
+
+  it("uses BODYSTRUCTURE sizes for a partial message, and still lists parts the parser never saw", () => {
+    const root = mixed(named("2", "application/pdf", "a.pdf", { size: 7800 }), named("3", "application/pdf", "b.pdf", { size: 78 }));
+    const listed = listAttachments([info("a.pdf", "application/pdf", 12)], root, { partial: true });
+    expect(listed).toEqual([
+      { index: 0, part: "2", filename: "a.pdf", content_type: "application/pdf", size: 5700, content_id: null },
+      { index: 1, part: "3", filename: "b.pdf", content_type: "application/pdf", size: 57, content_id: null },
+    ]);
+  });
+});
+
+describe("get_attachment PDF text cap", () => {
+  it("returns at most the character cap from a single huge page, with the full length counted", async () => {
+    const { session, get } = harness();
+    const lines = Array.from({ length: 1_000 }, (_, i) => `line ${String(i).padStart(4, "0")} ${"x".repeat(40)}`);
+    seed(session, mixed(attachment("application/pdf", "one-page.pdf")), { "2": base64Lines(simplePdf(["unused"], { 0: textStream(lines, 14_000) }, 14_000)) });
+    const result = await get({ index: 0 });
+    expect(result).toMatchObject({ ok: true, truncated: true, data: { pages: 1 } });
+    expect(result.ok && result.data.text_length).toBeGreaterThan(40_000);
+    expect(result.ok && result.data.text?.length).toBeLessThanOrEqual(ATTACHMENT_CHAR_CAP);
   });
 });

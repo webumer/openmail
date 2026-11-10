@@ -357,7 +357,7 @@ describe.skipIf(!live)(
       expectOk(pngBytes);
       expect(pngBytes.data.base64).toBe(PNG.toString("base64"));
 
-      const capped = await getAttachment({ ...deps, attachmentLimits: { maxBytes: 64 * 1024, pdfMaxPages: 100, pdfTimeoutMs: 10_000 } },
+      const capped = await getAttachment({ ...deps, attachmentLimits: { maxBytes: 64 * 1024, base64MaxBytes: 64 * 1024, pdfMaxPages: 100, pdfTimeoutMs: 10_000 } },
         USER, ACCOUNT, "INBOX", uid("huge"), { part: "1" });
       expectOk(capped);
       expect(capped.data.text?.length).toBe(BODY_CHAR_CAP);
