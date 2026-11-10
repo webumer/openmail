@@ -113,6 +113,7 @@ export function homePage(input: { email: string | null; csrf?: string; notice?: 
     ["list_folders", "Folders with total and unread counts."],
     ["search_messages", "Search by sender, recipient, subject, text, date, unread or attachments. Newest first, paged."],
     ["read_message", "Headers, plain-text body and attachment names and sizes. Does not mark the message as read."],
+    ["get_attachment", "Reads one attachment: the text of a PDF, CSV, HTML or text file, or the file itself on request. Nothing is stored, and the message stays unread."],
     ["read_thread", "The whole conversation, oldest first."],
     ["send_message", "Sends one email after you have seen it and said to send it. Off unless you turn sending on for that mailbox."],
   ];
@@ -210,7 +211,7 @@ ${copyField("Header", "Authorization: Bearer <your key>", "copy-header")}
 
 <section id="tools" class="section section-tint"><div class="container">
 <h2 class="section-title">Tools</h2>
-<p class="section-lead">Five read tools, plus send when you turn it on.</p>
+<p class="section-lead">Six read tools, plus send when you turn it on.</p>
 <div class="tools">${tools.map(([name, text]) => `<div class="card tool"><code>${name}</code><p>${text}</p></div>`).join("")}</div>
 </div></section>
 
@@ -264,7 +265,8 @@ export function privacyPage(options: { csrf?: string } = {}): string {
 <p>When an assistant you connected calls OpenMail, it can receive:</p>
 <ul>
 <li>For each mailbox: its name, address, provider preset, IMAP server name and an internal account ID.</li>
-<li>For each message: sender and recipient names and addresses, subject, date, message ID, read and flag status, size, the message text, and attachment names, types and sizes. Attachment files themselves are never returned.</li>
+<li>For each message: sender and recipient names and addresses, subject, date, message ID, read and flag status, size, the message text, and attachment names, types and sizes.</li>
+<li>When the assistant asks for one attachment: its text (for PDFs, text, CSV, HTML, JSON and XML files) or, only if it asks, the file itself up to 10 MB. Only that attachment is downloaded from your provider; it is not saved.</li>
 <li>Folder names with message and unread counts.</li>
 </ul>
 <p>Nothing else about you is returned. Mailbox passwords and your OpenMail password are never returned.</p>
@@ -330,7 +332,7 @@ export function supportPage(options: { csrf?: string } = {}): string {
 <h3>How do I delete my account?</h3>
 <p>Email ${SUPPORT_EMAIL} from your login address. We delete the account within 30 days, usually much sooner. You can remove any mailbox yourself at any time.</p>
 <h3>Which tools are available?</h3>
-<p>list_accounts, list_folders, search_messages, read_message, read_thread and send_message. Inputs, outputs, errors and limits are documented in <a href="https://github.com/webumer/openmail/blob/main/docs/tools.md" rel="noopener">docs/tools.md</a>.</p>
+<p>list_accounts, list_folders, search_messages, read_message, read_thread, get_attachment and send_message. Inputs, outputs, errors and limits are documented in <a href="https://github.com/webumer/openmail/blob/main/docs/tools.md" rel="noopener">docs/tools.md</a>.</p>
 </article>`,
     { ...options, path: "/support", description: "Get help with OpenMail: contact, GitHub issues and frequently asked questions." },
   );
@@ -623,7 +625,7 @@ function keyForm(csrf: string): string {
 function grokSection(mcpUrl: string | null): string {
   const url = mcpUrl ?? "Set OPENMAIL_PUBLIC_URL";
   return `<section id="grok"><h2>Connect to Grok Bot</h2>
-<p>Create an API key above, then add OpenMail to Grok Bot as a custom MCP connector (streamable HTTP) with this URL and header. A read-only key cannot send. Tools: list_accounts, list_folders, search_messages, read_message, read_thread, send_message.</p>
+<p>Create an API key above, then add OpenMail to Grok Bot as a custom MCP connector (streamable HTTP) with this URL and header. A read-only key cannot send. Tools: list_accounts, list_folders, search_messages, read_message, read_thread, get_attachment, send_message.</p>
 ${copyField("MCP URL", url, "dash-url")}
 ${copyField("Header", "Authorization: Bearer <your key>", "dash-header")}
 </section>`;

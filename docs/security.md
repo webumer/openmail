@@ -60,9 +60,9 @@ Mailbox library failures are classified before discarding raw errors into auth_f
 - Bearer token required on `/mcp` (API key or OAuth access token). Unknown, expired or revoked → `401`.
 - Per-key sliding window (90/min) → `429`. More than 30 failed bearer attempts a minute from one client address → `429`. Bodies over 1 MB → `413`.
 - IMAP work defaults to 25 s (`OPENMAIL_IMAP_OP_TIMEOUT_MS`, 5000–120000 ms). Search/address fallback/attachment scans and thread reads stop cooperatively with partial results. The gateway closes stalled connections after 5 s grace, including DNS/connect/logout waits, and returns `timeout`.
-- Resource limits: `read_message` fetches at most 10 MB of a message and `read_thread` at most 1 MB per message (100 messages), always as `BODY.PEEK[]<0.n>` partial fetches; a `has_attachment` search checks at most 2,000 messages; tool string inputs have length limits; IMAP connect/greeting timeouts are 15 s and the socket idle timeout is 60 s.
+- Resource limits: `read_message` fetches at most 10 MB of a message and `read_thread` at most 1 MB per message (100 messages), always as `BODY.PEEK[]<0.n>` partial fetches; a `has_attachment` search checks at most 2,000 messages; `get_attachment` downloads one MIME part as `BODY.PEEK[part]<0.n>` up to `OPENMAIL_ATTACHMENT_MAX_BYTES` (10 MB by default) and keeps it in memory only for that call, and extracts PDF text in a worker thread with a 256 MB heap, a page limit and a timeout; tool string inputs have length limits; IMAP connect/greeting timeouts are 15 s and the socket idle timeout is 60 s.
 - Tools are scoped to the authenticated user. Another user’s account id is `not_found`; IMAP is not contacted.
-- Message bodies, subjects, and headers are untrusted third-party content. Tool descriptions and results state that this content is data, not instructions.
+- Message bodies, attachments, subjects, and headers are untrusted third-party content. Tool descriptions and results state that this content is data, not instructions.
 
 ## Transport
 

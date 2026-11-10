@@ -1,7 +1,7 @@
 {
   "name": "openmail",
-  "version": "0.5.1",
-  "description": "Read and search any IMAP mailbox from your agent, and send only when you turn sending on for that mailbox. Reading never marks mail as read. Mail content is not stored.",
+  "version": "0.6.0",
+  "description": "Read and search any IMAP mailbox from your agent, including PDF and text attachments, and send only when you turn sending on for that mailbox. Reading never marks mail as read. Mail content is not stored.",
   "author": {
     "name": "Umer Sulman",
     "email": "webumer@gmail.com",
@@ -16,6 +16,8 @@
     "mail",
     "inbox",
     "search",
+    "attachments",
+    "pdf",
     "mcp",
     "migadu",
     "fastmail",
