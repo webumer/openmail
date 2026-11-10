@@ -37,7 +37,7 @@ const text = (r: unknown) => JSON.stringify((r as { content?: unknown }).content
 const message = (r: unknown) => String(((r as { structuredContent?: { error?: { message?: string } } }).structuredContent?.error?.message) ?? "");
 
 describe("tools/call guard (ChatGPT 'Unknown tool' report)", () => {
-  it("advertises the same six tools regardless of mail.send scope or mailbox count", async () => {
+  it("advertises the same seven tools regardless of mail.send scope or mailbox count", async () => {
     for (const [canSend, value] of [[false, []], [true, []], [false, [mailbox]], [true, [mailbox]]] as const) {
       const { client, close } = await connect({ value: [...value] }, [], canSend);
       try {
@@ -91,7 +91,7 @@ describe("tools/call guard (ChatGPT 'Unknown tool' report)", () => {
     try {
       for (const [name, args] of [
         ["list_folders", {}], ["search_messages", { unread: true }], ["read_message", { folder: "INBOX" }],
-        ["read_thread", { uid: "x" }], ["send_message", { to: ["fake@example.com"], body: "hi", user_confirmed: false }],
+        ["read_thread", { uid: "x" }], ["get_attachment", { part: "not-a-part" }], ["send_message", { to: ["fake@example.com"], body: "hi", user_confirmed: false }],
         ["list_accounts", { extra: 1 }],
       ] as const) {
         const result = await client.callTool({ name, arguments: args });
@@ -99,7 +99,7 @@ describe("tools/call guard (ChatGPT 'Unknown tool' report)", () => {
         expect(result.structuredContent).toMatchObject({ ok: true, setup_required: true, dashboard_url: "https://mail.example.com/dashboard" });
         expect(text(result)).toContain("No mailbox is connected");
       }
-      expect(metrics).toHaveLength(6);
+      expect(metrics).toHaveLength(7);
       expect(metrics.every((m) => m.kind === "tool_call" && m.outcome === "setup_required")).toBe(true);
     } finally { await close(); }
   });
@@ -132,6 +132,24 @@ describe("tools/call guard (ChatGPT 'Unknown tool' report)", () => {
       expect(text(result)).not.toContain("\\u0000");
       expect(text(result)).not.toContain("aaaa");
       expect(message(result)).toContain("no tool named like that");
+    } finally { await close(); }
+  });
+
+  it("advertises get_attachment as a read tool and maps its prefixed names", async () => {
+    for (const name of ["openmail.get_attachment", "mcp__openmail__get_attachment", "OpenMail:get_attachment"]) {
+      expect(resolveToolName(name)).toBe("get_attachment");
+    }
+    const { client, close } = await connect({ value: [mailbox] }, []);
+    try {
+      const { tools } = await client.listTools();
+      const read = tools.find((t) => t.name === "read_message")!;
+      const tool = tools.find((t) => t.name === "get_attachment")!;
+      expect(tool.annotations).toEqual({ ...read.annotations, title: "Get attachment" });
+      expect(tool.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false });
+      expect(Object.keys((tool.inputSchema as { properties: object }).properties).sort()).toEqual(["account", "folder", "include_base64", "index", "part", "uid"]);
+      const result = await client.callTool({ name: "openmail.get_attachment", arguments: { account: "work", folder: "INBOX", uid: 1 } });
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({ ok: false, error: { code: "invalid_argument", message: expect.stringContaining("index or part") } });
     } finally { await close(); }
   });
 

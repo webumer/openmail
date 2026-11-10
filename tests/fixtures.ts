@@ -60,6 +60,9 @@ export class RecordingSession {
   threadResult: number[] | null = null;
   threadCalls = 0;
   statusError = false;
+  /** Raw part bytes keyed by "uid:section". */
+  parts = new Map<string, Buffer>();
+  readonly partFetches: { uid: number; section: string; maxBytes: number }[] = [];
 
   async list(): Promise<ListedMailbox[]> {
     return this.mailboxes;
@@ -90,6 +93,12 @@ export class RecordingSession {
       if (message) found.push(message);
     }
     return found;
+  }
+
+  async fetchPart(uid: number, section: string, maxBytes: number): Promise<Buffer | null> {
+    this.partFetches.push({ uid, section, maxBytes });
+    const raw = this.parts.get(`${uid}:${section}`);
+    return raw ? raw.subarray(0, maxBytes) : null;
   }
 
   async thread(): Promise<number[] | null> {

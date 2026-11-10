@@ -216,6 +216,12 @@ function createSession(client: ImapClient, deadline: Deadline): ImapSession {
       const messages = await client.fetchAll(uids, toFetchQuery(query), { uid: true });
       return messages.map(mapFetched);
     },
+    async fetchPart(uid, section, maxBytes) {
+      // bodyParts are fetched as BODY.PEEK[section]<0.n> (imapflow uses BINARY only when asked), so \\Seen is never set.
+      const message = await client.fetchOne(uid, { uid: true, bodyParts: [{ key: section, start: 0, maxLength: maxBytes }] }, { uid: true });
+      if (!message) return null;
+      return message.bodyParts?.get(section.toLowerCase()) ?? message.bodyParts?.get(section) ?? null;
+    },
     thread: (algorithm, seedUid) => runThread(client, algorithm, seedUid),
   };
   return session;
@@ -316,10 +322,13 @@ function mapStructure(node: MessageStructureObject | undefined): BodyNode | null
   const children = node.childNodes?.map((child) => mapStructure(child)).filter((child): child is BodyNode => child !== null);
   return {
     type: node.type,
+    part: node.part ?? null,
     disposition: node.disposition ?? null,
     parameters: node.parameters ?? null,
     dispositionParameters: node.dispositionParameters ?? null,
     id: node.id ?? null,
+    encoding: node.encoding ? node.encoding.toLowerCase() : null,
+    size: typeof node.size === "number" ? node.size : null,
     childNodes: children && children.length > 0 ? children : null,
   };
 }
