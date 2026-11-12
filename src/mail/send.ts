@@ -98,7 +98,11 @@ export async function sendMessage(deps: SendDeps, userId: string, input: SendInp
     if (!deps.canSend) {
       return fail(
         "send_not_permitted",
-        `This connection is read-only. Reconnect OpenMail and allow sending, or use an API key with send permission (dashboard: ${dashboardUrl(deps.publicUrl)}).`,
+        `This connection was approved read-only, so it cannot send email. To enable sending: ` +
+          `1) turn on 'Allow sending' for the mailbox at ${dashboardUrl(deps.publicUrl)}; ` +
+          `2) remove the OpenMail app or connector from your assistant and add it again, and tick 'Also allow sending' on the OpenMail approval page. ` +
+          `Reconnecting or refreshing keeps the old read-only permission. ` +
+          `If you connect with an API key, use a key created with 'Read and send' permission.`,
       );
     }
     const account = await deps.store.getAccount(userId, input.account);

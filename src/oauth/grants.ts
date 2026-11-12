@@ -5,6 +5,7 @@ import {
   AUTHORIZATION_CODE_TTL_SECONDS,
   MAIL_READ_SCOPE,
   REFRESH_TOKEN_TTL_SECONDS,
+  SUPPORTED_SCOPES,
 } from "./config.js";
 import { OAuthError, type OAuthClient } from "./clients.js";
 import { redirectHost } from "./redirect-uri.js";
@@ -44,7 +45,10 @@ export function createAuthorizationCode(
     userId: string;
     redirectUri: string;
     codeChallenge: string;
+    /** Scope the user granted on the consent page. */
     scope: string;
+    /** Scope the client asked for. Defaults to the granted scope. */
+    requestedScope?: string;
     resource: string;
   },
   now = Date.now(),
@@ -52,8 +56,8 @@ export function createAuthorizationCode(
   purgeExpired(db, now);
   const code = randomToken(CODE_PREFIX, 32);
   db.prepare(
-    `INSERT INTO oauth_codes (code_hash, client_id, user_id, redirect_uri, code_challenge, scope, resource, created_at, expires_at, used_at, grant_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
+    `INSERT INTO oauth_codes (code_hash, client_id, user_id, redirect_uri, code_challenge, scope, requested_scope, resource, created_at, expires_at, used_at, grant_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
   ).run(
     sha256Hex(code),
     input.client.id,
@@ -61,6 +65,7 @@ export function createAuthorizationCode(
     input.redirectUri,
     input.codeChallenge,
     input.scope,
+    input.requestedScope ?? input.scope,
     input.resource,
     new Date(now).toISOString(),
     new Date(now + AUTHORIZATION_CODE_TTL_SECONDS * 1000).toISOString(),
@@ -75,6 +80,7 @@ interface CodeRow {
   redirect_uri: string;
   code_challenge: string;
   scope: string;
+  requested_scope: string | null;
   resource: string;
   expires_at: string;
   used_at: string | null;
@@ -113,8 +119,8 @@ export function redeemAuthorizationCode(
     const grantId = randomUUID();
     const stamp = new Date(now).toISOString();
     db.prepare(
-      `INSERT INTO oauth_grants (id, user_id, client_id, client_kind, client_name, redirect_host, scope, resource, created_at, last_used_at, revoked_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
+      `INSERT INTO oauth_grants (id, user_id, client_id, client_kind, client_name, redirect_host, scope, requested_scope, resource, created_at, last_used_at, revoked_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
     ).run(
       grantId,
       row.user_id,
@@ -123,6 +129,7 @@ export function redeemAuthorizationCode(
       input.client.clientName,
       redirectHost(row.redirect_uri),
       row.scope,
+      row.requested_scope ?? row.scope,
       row.resource,
       stamp,
     );
@@ -149,6 +156,8 @@ interface RefreshRow {
   client_id: string;
   /** Grant scope. Ceiling for a refresh that asks for a narrower or equal scope. */
   grant_scope: string;
+  /** Scope the client originally asked for. NULL on grants from before the column. */
+  grant_requested_scope: string | null;
   resource: string;
   grant_revoked: string | null;
 }
@@ -166,7 +175,7 @@ export function refreshGrant(
     const row = db
       .prepare(
         `SELECT t.token_hash, t.grant_id, t.expires_at, t.rotated_at, t.revoked_at, t.scope AS token_scope,
-                g.client_id, g.scope AS grant_scope, g.resource, g.revoked_at AS grant_revoked
+                g.client_id, g.scope AS grant_scope, g.requested_scope AS grant_requested_scope, g.resource, g.revoked_at AS grant_revoked
          FROM oauth_tokens t JOIN oauth_grants g ON g.id = t.grant_id
          WHERE t.token_hash = ? AND t.kind = 'refresh'`,
       )
@@ -182,15 +191,15 @@ export function refreshGrant(
     if (input.resource !== undefined && input.resource !== row.resource) {
       return new OAuthError("invalid_target", "resource does not match the original grant");
     }
-    // No scope parameter keeps this refresh token's scope. A token from before
-    // the column existed (NULL) keeps the grant. A requested scope must be a
-    // subset of the grant, which stays the ceiling and is not narrowed.
-    let scope = row.token_scope ?? row.grant_scope;
-    if (input.scope !== undefined) {
-      const granted = new Set(row.grant_scope.split(" "));
-      const requested = input.scope.split(" ").filter(Boolean);
-      if (!requested.every((s) => granted.has(s))) return new OAuthError("invalid_scope", "Requested scope exceeds the grant");
-      scope = requested.join(" ");
+    let scope: string;
+    if (input.scope === undefined) {
+      // No scope parameter keeps this refresh token's scope. A token from
+      // before the column existed (NULL) keeps the grant.
+      scope = row.token_scope ?? row.grant_scope;
+    } else {
+      const narrowed = refreshScope(row.grant_scope, row.grant_requested_scope, input.scope);
+      if (narrowed === null) return new OAuthError("invalid_scope", "Requested scope exceeds the grant");
+      scope = narrowed;
     }
     const stamp = new Date(now).toISOString();
     const rotated = db
@@ -205,6 +214,28 @@ export function refreshGrant(
   const result = run();
   if (result instanceof OAuthError) throw result;
   return result;
+}
+
+/**
+ * Scope for a refresh that names a scope. The grant is the ceiling: asking for
+ * anything outside it fails, so a refresh never widens. Scopes the user added
+ * on the consent page beyond what the client asked for (for example mail.send
+ * when the client asked for mail.read only) stay on the token: the client
+ * cannot ask for them by name because it never knew about them, so a refresh
+ * that repeats its original request must not drop them. A client that asks
+ * for less than it originally requested gets exactly what it asks for.
+ * Exported for tests.
+ */
+export function refreshScope(grantScope: string, requestedScope: string | null, asked: string): string | null {
+  const granted = new Set(grantScope.split(" ").filter(Boolean));
+  const original = new Set((requestedScope ?? grantScope).split(" ").filter(Boolean));
+  const wanted = new Set(asked.split(" ").filter((s) => s.length > 0 && s !== "offline_access"));
+  for (const s of wanted) if (!granted.has(s)) return null;
+  if (wanted.size === 0) return null;
+  for (const s of granted) {
+    if (!original.has(s)) wanted.add(s);
+  }
+  return SUPPORTED_SCOPES.filter((s) => wanted.has(s)).join(" ");
 }
 
 function issueTokens(db: Database, grantId: string, scope: string, now: number): IssuedTokens {

@@ -2,7 +2,7 @@
 
 Reference for assistants, marketplace reviewers and self-hosters: setup, permissions, every tool's inputs and outputs, read/write classification, side effects, errors and limits.
 
-Endpoint: https://mcp.openmail.tools/mcp (MCP streamable HTTP). Server name `openmail`, version 0.6.0.
+Endpoint: https://mcp.openmail.tools/mcp (MCP streamable HTTP). Server name `openmail`, version 0.6.1.
 
 ## Setup
 1. Create an OpenMail account at https://openmail.tools and add a mailbox (provider preset or custom IMAP host, port 993 TLS, username and app password). OpenMail tests the login before saving.
@@ -76,7 +76,7 @@ Tool results are JSON: `{"ok": true, "data": ..., "truncated": bool, "warnings":
 | `imap_error` | The provider refused or failed. Messages are generic: "Could not reach…", "TLS verification failed…", "IMAP sign-in failed" |
 | `timeout` | The whole IMAP operation exceeded its work budget plus grace period; retry with a narrower search |
 | `smtp_error` | SMTP failed. One of: "Could not reach the SMTP server", "SMTP sign-in failed", "TLS verification failed for the SMTP server", "The SMTP server rejected the message" |
-| `send_not_permitted` | This connection is read-only |
+| `send_not_permitted` | This connection was approved read-only. Turn on sending for the mailbox, then remove the OpenMail app or connector and add it again, ticking "Also allow sending" (reconnecting keeps the old permission); API keys need "Read and send" |
 | `sending_disabled` | Sending is turned off for that mailbox |
 | `rate_limited` | The user or mailbox is over the send limit (the message says when to retry), or `get_attachment` could not get a PDF extraction slot in time; retry in a few seconds |
 | `config_error` | The mailbox settings are unusable (e.g. host not a public address) |

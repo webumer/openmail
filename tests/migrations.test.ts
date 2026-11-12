@@ -5,6 +5,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import type Database from "better-sqlite3";
 import { migrate, openDatabase, resolveDatabasePath } from "../src/db/index.js";
 import { migrations } from "../src/db/migrations/index.js";
+import { getStoredClient } from "../src/oauth/clients.js";
+import { refreshGrant } from "../src/oauth/grants.js";
+import { sha256Hex } from "../src/oauth/tokens.js";
 
 const open: Database[] = [];
 
@@ -27,6 +30,7 @@ describe("migrations", () => {
       { version: 3, applied_at: expect.any(String) },
       { version: 4, applied_at: expect.any(String) },
       { version: 5, applied_at: expect.any(String) },
+      { version: 6, applied_at: expect.any(String) },
     ]);
 
     migrate(db);
@@ -134,6 +138,41 @@ describe("migrations", () => {
     );
     expect(scope?.name).toBe("scope");
     expect(scope?.notnull).toBe(0);
+  });
+
+  it("upgrades v5 OAuth rows to v6 with NULL requested_scope and keeps the old refresh behaviour", () => {
+    const db = track(openDatabase(":memory:"));
+    db.exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`);
+    for (const migration of migrations) {
+      if (migration.version >= 6) break;
+      db.exec(migration.sql);
+      db.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(migration.version, "2026-01-01T00:00:00.000Z");
+    }
+    const stamp = "2026-01-01T00:00:00.000Z";
+    const later = new Date(Date.now() + 86_400_000).toISOString();
+    db.prepare(`INSERT INTO users (id, email, password_hash, wrapped_data_key, created_at) VALUES (?, ?, ?, ?, ?)`).run(
+      "user-1", "ada@example.com", "hash", Buffer.from("key"), stamp,
+    );
+    db.prepare(
+      `INSERT INTO oauth_clients (id, kind, client_name, redirect_uris, token_endpoint_auth_method, created_at, refreshed_at)
+       VALUES (?, 'dcr', 'Old Client', ?, 'none', ?, ?)`,
+    ).run("client-1", JSON.stringify(["https://client.example/cb"]), stamp, stamp);
+    db.prepare(
+      `INSERT INTO oauth_grants (id, user_id, client_id, client_kind, client_name, redirect_host, scope, resource, created_at)
+       VALUES ('grant-1', 'user-1', 'client-1', 'dcr', 'Old Client', 'client.example', 'mail.read mail.send', 'https://mcp.example/mcp', ?)`,
+    ).run(stamp);
+    const refresh = "omr_legacy-refresh-token";
+    db.prepare(
+      `INSERT INTO oauth_tokens (token_hash, grant_id, kind, created_at, expires_at, scope) VALUES (?, 'grant-1', 'refresh', ?, ?, 'mail.read mail.send')`,
+    ).run(sha256Hex(refresh), stamp, later);
+    migrate(db);
+    const grant = db.prepare("SELECT scope, requested_scope FROM oauth_grants WHERE id = 'grant-1'").get();
+    expect(grant).toEqual({ scope: "mail.read mail.send", requested_scope: null });
+    const client = getStoredClient(db, "client-1");
+    expect(client).not.toBeNull();
+    // NULL requested_scope = requested what was granted, so an explicit narrower scope still narrows.
+    const narrowed = refreshGrant(db, { client: client!, refreshToken: refresh, scope: "mail.read", resource: undefined });
+    expect(narrowed.scope).toBe("mail.read");
   });
 
   it("creates the parent directory for a file database and enforces foreign keys", () => {
