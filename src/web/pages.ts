@@ -677,6 +677,8 @@ export interface ConsentView {
   accounts: MailAccountSummary[];
   params: Record<string, string>;
   sendRequested?: boolean;
+  /** Show the "Also allow sending" box (requested, or the user has a send-enabled mailbox). */
+  sendOffered?: boolean;
 }
 
 /** "<app> wants (read-only) access to your OpenMail mailboxes" with Allow / Deny and an optional send checkbox. */
@@ -697,11 +699,16 @@ export function consentPage(view: ConsentView): string {
       : `<ul class="consent-list">${view.accounts
           .map((a) => `<li>${icon("inbox")}<span><strong>${escapeHtml(a.name)}</strong> · ${escapeHtml(a.email)}</span></li>`)
           .join("")}</ul>`;
-  const sendChoice = view.sendRequested
+  const offered = view.sendOffered ?? view.sendRequested ?? false;
+  const sendChoice = offered
     ? `<h2>Send email as you</h2>
-<label class="check"><input name="allow_send" type="checkbox" value="on"> Also allow ${escapeHtml(view.clientName)} to send email from mailboxes where you turned on sending. Your assistant must show you each email and ask before sending.</label>`
-    : "";
-  const cannotSend = view.sendRequested
+<label class="check"><input name="allow_send" type="checkbox" value="on"> Also allow ${escapeHtml(view.clientName)} to send email from mailboxes where you turned on sending. Your assistant must show you each email and ask before sending.</label>${
+        view.sendRequested ? "" : `\n<p class="fine">${escapeHtml(view.clientName)} asked for read-only access. Leave the box unticked to keep it read-only.</p>`
+      }`
+    : view.accounts.length > 0
+      ? `<p class="fine">To let assistants send email, turn on sending for a mailbox on your <a href="/dashboard">dashboard</a>, then connect again.</p>`
+      : "";
+  const cannotSend = offered
     ? "Send email unless you tick the box above. It cannot delete, move or flag mail, or mark it as read"
     : "Send, delete, move or flag mail, or mark it as read";
   return layout(

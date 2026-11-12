@@ -153,3 +153,16 @@ describe("CIMD cache", () => {
     db.close();
   });
 });
+
+describe("refreshScope (v0.6.1)", () => {
+  it("keeps user-added scopes when the client repeats its original request", async () => {
+    const { refreshScope } = await import("../src/oauth/grants.js");
+    expect(refreshScope("mail.read mail.send", "mail.read", "mail.read")).toBe("mail.read mail.send");
+    expect(refreshScope("mail.read mail.send", "mail.read", "mail.read offline_access")).toBe("mail.read mail.send");
+    expect(refreshScope("mail.read mail.send", "mail.read mail.send", "mail.read")).toBe("mail.read");
+    expect(refreshScope("mail.read mail.send", null, "mail.read")).toBe("mail.read");
+    expect(refreshScope("mail.read", "mail.read", "mail.read mail.send")).toBeNull();
+    expect(refreshScope("mail.read", "mail.read", "mail.admin")).toBeNull();
+    expect(refreshScope("mail.read mail.send", "mail.read", "offline_access")).toBeNull();
+  });
+});

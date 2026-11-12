@@ -27,6 +27,7 @@ describe("migrations", () => {
       { version: 3, applied_at: expect.any(String) },
       { version: 4, applied_at: expect.any(String) },
       { version: 5, applied_at: expect.any(String) },
+      { version: 6, applied_at: expect.any(String) },
     ]);
 
     migrate(db);

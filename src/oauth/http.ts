@@ -422,6 +422,7 @@ function renderConsent(
     res,
     CONTENT_SECURITY_POLICY.replace("form-action 'self'", `form-action 'self' ${redirect.origin}`),
   );
+  const accounts = mailAccounts.list(ctx.db, session.userId);
   writeHtml(
     res,
     200,
@@ -434,9 +435,10 @@ function renderConsent(
       redirectUri: checked.redirectUri,
       redirectHost: redirect.host,
       loopback,
-      accounts: mailAccounts.list(ctx.db, session.userId),
+      accounts,
       params: checked.normalized,
       sendRequested: checked.scope.split(" ").includes(MAIL_SEND_SCOPE),
+      sendOffered: sendOffered(checked.scope, accounts),
     }),
   );
 }
@@ -487,7 +489,8 @@ async function handleAuthorizePost(req: IncomingMessage, res: ServerResponse, ct
     userId: session.userId,
     redirectUri: checked.redirectUri,
     codeChallenge: checked.codeChallenge,
-    scope: grantedScope(checked.scope, form.get("allow_send")),
+    scope: grantedScope(checked.scope, form.get("allow_send"), sendOffered(checked.scope, mailAccounts.list(ctx.db, session.userId))),
+    requestedScope: checked.scope,
     resource: checked.resource,
   });
   returnToClient(res, checked.redirectUri, ctx.config, { code, state: checked.state });
@@ -517,13 +520,26 @@ function returnToClient(
   writeHtml(res, 200, returnToClientPage(href), { refresh: `0; url=${href}` });
 }
 
-/** mail.send is granted only when it was requested and the user ticked the box. */
-function grantedScope(requested: string, allowSend: string | null): string {
-  const parts = requested.split(" ").filter((part) => part.length > 0);
-  const send = parts.includes(MAIL_SEND_SCOPE) && allowSend === "on";
-  const kept = parts.filter((part) => part !== MAIL_SEND_SCOPE || send);
-  if (!kept.includes(MAIL_READ_SCOPE)) kept.unshift(MAIL_READ_SCOPE);
-  return SUPPORTED_SCOPES.filter((scope) => kept.includes(scope)).join(" ");
+/**
+ * The "Also allow sending" box is offered when the client asked for mail.send,
+ * or when the user has at least one mailbox with sending turned on. Some
+ * clients (ChatGPT's directory app) only ever ask for mail.read, so without
+ * this their users could never grant sending.
+ */
+function sendOffered(requested: string, accounts: ReadonlyArray<{ sendEnabled: boolean }>): boolean {
+  return requested.split(" ").includes(MAIL_SEND_SCOPE) || accounts.some((account) => account.sendEnabled);
+}
+
+/**
+ * mail.read is always granted. mail.send is granted only when the box was
+ * offered and the user ticked it; nothing else from the form can add scopes.
+ */
+function grantedScope(requested: string, allowSend: string | null, offered: boolean): string {
+  const parts = requested.split(" ").filter((part) => part.length > 0 && part !== MAIL_SEND_SCOPE);
+  const kept = new Set(parts);
+  kept.add(MAIL_READ_SCOPE);
+  if (offered && allowSend === "on") kept.add(MAIL_SEND_SCOPE);
+  return SUPPORTED_SCOPES.filter((scope) => kept.has(scope)).join(" ");
 }
 
 function redirectToClient(

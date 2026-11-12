@@ -1008,6 +1008,207 @@ describe("OAuth 2.1 authorization server", () => {
     expect(fromGrant.body.scope).toBe("mail.read mail.send");
     expect(authenticateDatabaseKey(db, `Bearer ${fromGrant.body.access_token as string}`, config.resource)?.canSend).toBe(true);
   });
+  describe("send box for read-only requests (v0.6.1)", () => {
+    function addSendMailbox(userId: string, name: string, email: string): void {
+      const account = mailAccounts.add(db, master, { userId, name, email, preset: "migadu", password: `${name}-mailbox-secret` });
+      expect(mailAccounts.setSendEnabled(db, userId, account.id, true)).toBe(true);
+    }
+
+    async function exchange(clientId: string, location: URL, verifier: string): Promise<{ status: number; body: Record<string, unknown> }> {
+      return token({
+        grant_type: "authorization_code",
+        client_id: clientId,
+        code: location.searchParams.get("code") as string,
+        redirect_uri: REDIRECT,
+        code_verifier: verifier,
+        resource: config.resource,
+      });
+    }
+
+    function canSend(access: unknown): boolean | undefined {
+      return authenticateDatabaseKey(db, `Bearer ${access as string}`, config.resource)?.canSend;
+    }
+
+    it("offers the box on a mail.read request when a mailbox can send; ticking grants mail.send", async () => {
+      const clientId = (await register()).client_id as string;
+      const jar = new CookieJar();
+      const userId = await signup(jar, "ro-tick@example.com");
+      addSendMailbox(userId, "Sender", "sender@work.example");
+      const { verifier, challenge } = pkce();
+      const page = await fetchJar(jar, authorizeUrl(standardParams(clientId, challenge, { scope: "mail.read" })));
+      const html = await readHtml(page);
+      expect(html).toContain("wants read-only access");
+      const form = /<form\b[^>]*\baction="\/oauth\/authorize"[^>]*>[\s\S]*?<\/form>/.exec(html)?.[0] ?? "";
+      expect(form).toContain('name="allow_send"');
+      expect(form).not.toContain("checked");
+      expect(html).toContain("asked for read-only access");
+      expect(html.slice(html.indexOf("It will not be able to"))).toContain("Send email unless you tick the box above");
+
+      const issued = await exchange(clientId, await submitAuthorizeForm(jar, html, { allowSend: true }), verifier);
+      expect(issued.status).toBe(200);
+      expect(issued.body.scope).toBe("mail.read mail.send");
+      expect(canSend(issued.body.access_token)).toBe(true);
+      const grant = db.prepare("SELECT scope, requested_scope FROM oauth_grants").get() as { scope: string; requested_scope: string };
+      expect(grant).toEqual({ scope: "mail.read mail.send", requested_scope: "mail.read" });
+    });
+
+    it("leaves a mail.read request read-only when the box is not ticked", async () => {
+      const clientId = (await register()).client_id as string;
+      const jar = new CookieJar();
+      const userId = await signup(jar, "ro-untick@example.com");
+      addSendMailbox(userId, "Sender", "sender@work.example");
+      const { verifier, challenge } = pkce();
+      const page = await fetchJar(jar, authorizeUrl(standardParams(clientId, challenge, { scope: "mail.read" })));
+      const issued = await exchange(clientId, await submitAuthorizeForm(jar, await readHtml(page), { allowSend: false }), verifier);
+      expect(issued.body.scope).toBe("mail.read");
+      expect(canSend(issued.body.access_token)).toBe(false);
+      // An empty scope (defaults to mail.read) behaves the same.
+      const { verifier: v2, challenge: c2 } = pkce();
+      const params = standardParams(clientId, c2);
+      delete (params as Record<string, string | undefined>).scope;
+      const page2 = await fetchJar(jar, authorizeUrl(params));
+      const html2 = await readHtml(page2);
+      expect(html2).toContain('name="allow_send"');
+      const issued2 = await exchange(clientId, await submitAuthorizeForm(jar, html2, { allowSend: false }), v2);
+      expect(issued2.body.scope).toBe("mail.read");
+    });
+
+    it("keeps a user-granted mail.send on refresh with no scope or the original scope, narrows on an explicit narrower scope, never widens", async () => {
+      // Client A asked for mail.read; the user ticked send.
+      const clientId = (await register()).client_id as string;
+      const jar = new CookieJar();
+      const userId = await signup(jar, "ro-refresh@example.com");
+      addSendMailbox(userId, "Sender", "sender@work.example");
+      const { verifier, challenge } = pkce();
+      const page = await fetchJar(jar, authorizeUrl(standardParams(clientId, challenge, { scope: "mail.read" })));
+      const issued = await exchange(clientId, await submitAuthorizeForm(jar, await readHtml(page), { allowSend: true }), verifier);
+      expect(issued.body.scope).toBe("mail.read mail.send");
+
+      const noScope = await token({ grant_type: "refresh_token", client_id: clientId, refresh_token: issued.body.refresh_token as string });
+      expect(noScope.status).toBe(200);
+      expect(noScope.body.scope).toBe("mail.read mail.send");
+      expect(canSend(noScope.body.access_token)).toBe(true);
+
+      const sameScope = await token({
+        grant_type: "refresh_token",
+        client_id: clientId,
+        refresh_token: noScope.body.refresh_token as string,
+        scope: "mail.read",
+      });
+      expect(sameScope.status).toBe(200);
+      expect(sameScope.body.scope).toBe("mail.read mail.send");
+      expect(canSend(sameScope.body.access_token)).toBe(true);
+
+      const withOffline = await token({
+        grant_type: "refresh_token",
+        client_id: clientId,
+        refresh_token: sameScope.body.refresh_token as string,
+        scope: "mail.read offline_access",
+      });
+      expect(withOffline.status).toBe(200);
+      expect(withOffline.body.scope).toBe("mail.read mail.send");
+
+      // Client B asked for mail.read mail.send and the user ticked; a refresh asking for mail.read narrows.
+      const { verifier: v2, challenge: c2 } = pkce();
+      const page2 = await fetchJar(jar, authorizeUrl(standardParams(clientId, c2, { scope: "mail.read mail.send" })));
+      const both = await exchange(clientId, await submitAuthorizeForm(jar, await readHtml(page2), { allowSend: true }), v2);
+      expect(both.body.scope).toBe("mail.read mail.send");
+      const narrowed = await token({
+        grant_type: "refresh_token",
+        client_id: clientId,
+        refresh_token: both.body.refresh_token as string,
+        scope: "mail.read",
+      });
+      expect(narrowed.body.scope).toBe("mail.read");
+      expect(canSend(narrowed.body.access_token)).toBe(false);
+
+      // A read-only grant can never be widened by refresh.
+      const { verifier: v3, challenge: c3 } = pkce();
+      const page3 = await fetchJar(jar, authorizeUrl(standardParams(clientId, c3, { scope: "mail.read" })));
+      const ro = await exchange(clientId, await submitAuthorizeForm(jar, await readHtml(page3), { allowSend: false }), v3);
+      expect(ro.body.scope).toBe("mail.read");
+      const widen = await token({
+        grant_type: "refresh_token",
+        client_id: clientId,
+        refresh_token: ro.body.refresh_token as string,
+        scope: "mail.read mail.send",
+      });
+      expect(widen.status).toBe(400);
+      expect(widen.body.error).toBe("invalid_scope");
+    });
+
+    it("shows no send box and a short note when no mailbox can send; a forged allow_send is ignored", async () => {
+      const clientId = (await register()).client_id as string;
+      const jar = new CookieJar();
+      const userId = await signup(jar, "ro-nosend@example.com");
+      addMailbox(userId, "Read Box", "read@work.example");
+      const { verifier, challenge } = pkce();
+      const params = standardParams(clientId, challenge, { scope: "mail.read" });
+      const page = await fetchJar(jar, authorizeUrl(params));
+      const html = await readHtml(page);
+      expect(html).not.toContain('name="allow_send"');
+      expect(html).toContain("turn on sending for a mailbox");
+      // Hand-crafted POST with allow_send=on and a valid CSRF token: still read-only.
+      const issued = await exchange(clientId, await consent(jar, params, "allow", { allow_send: "on" }), verifier);
+      expect(issued.body.scope).toBe("mail.read");
+      expect(canSend(issued.body.access_token)).toBe(false);
+    });
+
+    it("rejects consent tampering: no CSRF, foreign scopes, or allow_send values other than on", async () => {
+      const clientId = (await register()).client_id as string;
+      const jar = new CookieJar();
+      const userId = await signup(jar, "ro-tamper@example.com");
+      addSendMailbox(userId, "Sender", "sender@work.example");
+      const { verifier, challenge } = pkce();
+      const params = standardParams(clientId, challenge, { scope: "mail.read" });
+      const page = await fetchJar(jar, authorizeUrl(params));
+      const html = await readHtml(page);
+      const hidden = new URLSearchParams();
+      for (const match of html.matchAll(/<input type="hidden" name="([^"]+)" value="([^"]*)">/g)) {
+        hidden.set(match[1] as string, decodeEntities(match[2] as string));
+      }
+      const post = (fields: URLSearchParams, cookieJar = jar) =>
+        fetchJar(cookieJar, `${base}/oauth/authorize`, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: fields,
+        });
+
+      // Missing / wrong CSRF token: rejected, no code.
+      const noCsrf = new URLSearchParams(hidden);
+      noCsrf.delete("_csrf");
+      noCsrf.set("decision", "allow");
+      noCsrf.set("allow_send", "on");
+      expect((await post(noCsrf)).status).toBe(403);
+      const badCsrf = new URLSearchParams(noCsrf);
+      badCsrf.set("_csrf", "x".repeat(43));
+      expect((await post(badCsrf)).status).toBe(403);
+      // Another browser without the session cannot use this user's form.
+      expect((await post(new URLSearchParams({ ...Object.fromEntries(hidden), decision: "allow", allow_send: "on" }), new CookieJar())).status).toBe(403);
+      expect(db.prepare("SELECT COUNT(*) AS n FROM oauth_codes").get()).toEqual({ n: 0 });
+
+      // A scope outside mail.read / mail.send in the posted form is refused.
+      const foreign = new URLSearchParams(hidden);
+      foreign.set("scope", "mail.read mail.admin");
+      foreign.set("decision", "allow");
+      foreign.set("allow_send", "on");
+      const foreignRes = await post(foreign);
+      const foreignRefresh = foreignRes.headers.get("refresh") ?? "";
+      expect(new URL(foreignRefresh.slice("0; url=".length)).searchParams.get("error")).toBe("invalid_scope");
+      expect(db.prepare("SELECT COUNT(*) AS n FROM oauth_codes").get()).toEqual({ n: 0 });
+
+      // allow_send must be exactly "on".
+      const odd = new URLSearchParams(hidden);
+      odd.set("decision", "allow");
+      odd.set("allow_send", "yes");
+      const oddRes = await post(odd);
+      const oddUrl = new URL((oddRes.headers.get("refresh") ?? "").slice("0; url=".length));
+      const issued = await exchange(clientId, oddUrl, verifier);
+      expect(issued.body.scope).toBe("mail.read");
+      expect(db.prepare("SELECT scope FROM oauth_codes").all()).toEqual([{ scope: "mail.read" }]);
+    });
+  });
+
 });
 
 function decodeEntities(value: string): string {

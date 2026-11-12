@@ -405,6 +405,11 @@ describe("permission and isolation", () => {
     if (!denied.ok) {
       expect(denied.error.code).toBe("send_not_permitted");
       expect(denied.error.message).toContain("https://openmail.example/dashboard");
+      expect(denied.error.message).toContain("approved read-only");
+      expect(denied.error.message).toContain("remove the OpenMail app or connector from your assistant and add it again");
+      expect(denied.error.message).toContain("'Also allow sending'");
+      expect(denied.error.message).toContain("Reconnecting or refreshing keeps the old read-only permission");
+      expect(denied.error.message).toContain("'Read and send'");
     }
     const off = deps({ account: mailbox({ sendEnabled: false }) });
     const disabled = await sendMessage(off.deps, "user", baseInput);
