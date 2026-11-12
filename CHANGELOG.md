@@ -4,7 +4,7 @@
 
 ### Changed
 - OAuth consent: the "Also allow sending" box (unticked by default) is now shown even when the app asked for `mail.read` only, as long as you have at least one mailbox with sending turned on. Some apps, such as ChatGPT's directory app, only ask for `mail.read`, so their users could not grant sending before. Ticking it grants `mail.read mail.send`, and the token response returns the scope actually granted. Unticked stays read-only. Sending still needs the per-mailbox opt-in and `user_confirmed: true` on each call. Users with no send-enabled mailbox see a short note instead.
-- Refresh no longer drops a `mail.send` the user granted when the app refreshes with no scope or with the scope it first asked for. The grant now stores the requested scope; a refresh that asks for less than that is narrowed, and a refresh never widens past the grant. `offline_access` in a refresh scope is ignored.
+- Refresh no longer drops a `mail.send` the user granted when the app refreshes with no scope or with the scope it first asked for. The grant now stores the requested scope; a refresh that asks for less than that is narrowed, and a refresh never widens past the grant. `offline_access` in a refresh scope is ignored. A client that only ever asked for `mail.read` cannot drop a user-granted `mail.send` by refreshing; the user can disconnect the app on the dashboard, or the client can revoke the token.
 - `send_not_permitted` now explains that the connection was approved read-only and how to fix it: turn on sending for the mailbox, then remove the OpenMail app or connector and add it again, ticking "Also allow sending" (reconnecting or refreshing keeps the old permission); API-key clients need a "Read and send" key.
 
 ### Database

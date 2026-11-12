@@ -715,7 +715,7 @@ export function consentPage(view: ConsentView): string {
     "Allow access · OpenMail",
     `<div class="auth"><div class="card auth-card consent">
 <a class="auth-logo" href="/"><img src="/logo.svg" alt="OpenMail" width="56" height="56"></a>
-<h1><span class="consent-app">${escapeHtml(view.clientName)}</span> ${view.sendRequested ? "wants access" : "wants read-only access"} to your OpenMail mailboxes</h1>
+<h1><span class="consent-app">${escapeHtml(view.clientName)}</span> ${view.sendRequested ? "wants access" : offered ? "asks for read-only access" : "wants read-only access"} to your OpenMail mailboxes</h1>
 <p class="muted">Signed in as ${escapeHtml(view.email)}</p>
 ${identity}
 ${loopback}

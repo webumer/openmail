@@ -1037,7 +1037,7 @@ describe("OAuth 2.1 authorization server", () => {
       const { verifier, challenge } = pkce();
       const page = await fetchJar(jar, authorizeUrl(standardParams(clientId, challenge, { scope: "mail.read" })));
       const html = await readHtml(page);
-      expect(html).toContain("wants read-only access");
+      expect(html).toContain("asks for read-only access");
       const form = /<form\b[^>]*\baction="\/oauth\/authorize"[^>]*>[\s\S]*?<\/form>/.exec(html)?.[0] ?? "";
       expect(form).toContain('name="allow_send"');
       expect(form).not.toContain("checked");
